@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+venv/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Large model files (don't commit)
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# Results (generated — commit selectively)
+# eval/*.csv   ← uncomment to also ignore CSVs
+
+# macOS
+.DS_Store
+
+# API keys (NEVER commit)
+secrets.py
+api_keys.py
