@@ -22,6 +22,25 @@ from dataclasses import dataclass
 from triple_extractor import Triple, SPATIAL_KEYWORDS
 
 
+
+# ---------------------------------------------------------------------------
+# Query cleaning utility
+# ---------------------------------------------------------------------------
+
+_STOP_WORDS = {"a", "an", "the", "two", "three", "four", "some", "many", "several", "old"}
+
+def _clean_query(text: str) -> str:
+    """
+    Strip leading articles/determiners so OWL-ViT gets clean noun phrases.
+    "a cat" → "cat", "an old man" → "man", "two toy cars" → "toy cars"
+    OWL-ViT text-matching works significantly better without determiners.
+    """
+    words = text.strip().split()
+    while words and words[0].lower() in _STOP_WORDS:
+        words = words[1:]
+    return " ".join(words) if words else text.strip()
+
+
 # ---------------------------------------------------------------------------
 # VQA Verifier  (BLIP-2)
 # ---------------------------------------------------------------------------
@@ -59,15 +78,21 @@ class VQAVerifier:
         Examples:
             (woman, hold, dog)   → "Is the woman holding the dog?"
             (car, be, red)       → "Is the car red?"
-            (man, sit, bench)    → "Is the man sitting on the bench?"
+            (cat, under, couch)  → "Is the cat under the couch?"
+            (couple, on, escalator) → "Is the couple on the escalator?"
         """
-        s, r, o = triple.subject, triple.relation, triple.obj
+        s = _clean_query(triple.subject)
+        o = _clean_query(triple.obj)
+        r = triple.relation
 
         if triple.relation_type == "ATTRIBUTE":
             return f"Is the {s} {o}?"
 
-        # For action relations, add -ing suffix to verb lemma if needed.
-        # spaCy gives us the lemma (base form), so we conjugate to present participle.
+        # Spatial: preposition goes directly between subject and object
+        if triple.relation_type == "SPATIAL":
+            return f"Is the {s} {r} the {o}?"
+
+        # ACTION / OTHER: conjugate verb to present participle
         verb_ing = _to_present_participle(r)
         return f"Is the {s} {verb_ing} the {o}?"
 
@@ -314,16 +339,20 @@ class SpatialVerifier:
         Returns:
             (is_supported, confidence)
         """
-        queries = [triple.subject, triple.obj]
+        # Clean queries: strip articles so OWL-ViT matches better
+        # "a cat" → "cat", "two toy cars" → "toy cars", "an old man" → "man"
+        subj_q = _clean_query(triple.subject)
+        obj_q  = _clean_query(triple.obj)
+        queries = [subj_q, obj_q]
         detections = self.detect(image, queries)
 
-        subj_boxes = detections[triple.subject]
-        obj_boxes  = detections[triple.obj]
+        subj_boxes = detections[subj_q]
+        obj_boxes  = detections[obj_q]
 
-        # If either entity is not detected, we can't verify — assume not hallucinated
-        # (conservative: don't flag what we can't confirm)
+        # If either entity is not detected, we can't verify — return low confidence
+        # so the caller can fall back to VQA
         if not subj_boxes or not obj_boxes:
-            return True, 0.4   # low confidence = uncertain
+            return True, 0.3   # low confidence = triggers VQA fallback
 
         subj_box = subj_boxes[0]   # top-scoring detection for subject
         obj_box  = obj_boxes[0]    # top-scoring detection for object
@@ -359,10 +388,19 @@ class RelationVerifier:
     def verify_triple(self, image: Image.Image, triple: Triple) -> Triple:
         """
         Verify one triple against the image. Sets triple.hallucinated in place.
+
+        For SPATIAL triples:
+          1. Try OWL-ViT + geometry first (more reliable when objects are detected)
+          2. If OWL-ViT confidence is too low (objects not found), fall back to BLIP-2 VQA
+             with a natural prepositional question: "Is the cat under the couch?"
+
         Returns the same Triple object (modified).
         """
         if triple.relation_type == "SPATIAL":
             is_supported, conf = self.spatial.verify(image, triple)
+            # Fall back to VQA if OWL-ViT couldn't confidently detect the objects
+            if conf < self.CONFIDENCE_THRESHOLD:
+                is_supported, conf = self.vqa.verify(image, triple)
         else:
             is_supported, conf = self.vqa.verify(image, triple)
 
