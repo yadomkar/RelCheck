@@ -205,7 +205,13 @@ class SpatialVerifier:
 
         # Post-process to get boxes in [0,1] normalized coords
         target_sizes = torch.tensor([image.size[::-1]])  # (H, W)
-        results = self.processor.post_process_object_detection(
+        # Newer transformers moved post_process off the processor onto image_processor
+        _post_process = (
+            self.processor.post_process_object_detection
+            if hasattr(self.processor, "post_process_object_detection")
+            else self.processor.image_processor.post_process_object_detection
+        )
+        results = _post_process(
             outputs=outputs,
             target_sizes=target_sizes,
             threshold=self.DETECTION_THRESHOLD,
