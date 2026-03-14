@@ -9,18 +9,21 @@ venv/
 # Jupyter checkpoints
 .ipynb_checkpoints/
 
-# Large model files (don't commit)
+# Large model files
 *.bin
 *.safetensors
 *.pt
 *.pth
 
-# Results (generated — commit selectively)
-# eval/*.csv   ← uncomment to also ignore CSVs
-
 # macOS
 .DS_Store
 
-# API keys (NEVER commit)
+# API keys
 secrets.py
 api_keys.py
+
+# Productivity system
+dashboard.html
+memory/
+TASKS.md
+CLAUDE.md
