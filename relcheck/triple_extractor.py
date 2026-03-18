@@ -263,6 +263,110 @@ class TripleExtractor:
 
 
 # ---------------------------------------------------------------------------
+# LLM-based Triple Extractor  (Mistral-7B via Together.ai)
+# ---------------------------------------------------------------------------
+
+class LLMTripleExtractor:
+    """
+    Uses Mistral-7B-Instruct via Together.ai to extract triples from captions.
+
+    Advantages over spaCy dependency parsing:
+      - Handles complex sentence structures, passive voice, relative clauses
+      - Extracts implicit relations spaCy misses
+      - More natural relation lemmatization
+      - Falls back to spaCy if API call fails
+
+    The prompt is designed to produce clean pipe-separated output that parses
+    deterministically, with relation type classification included.
+    """
+
+    MODEL = "mistralai/Mistral-7B-Instruct-v0.3"
+
+    SYSTEM_PROMPT = (
+        "You are a precise information extraction engine. "
+        "Extract ALL (subject, relation, object) triples from image captions. "
+        "Be exhaustive — every spatial, action, and attribute relation counts."
+    )
+
+    USER_TEMPLATE = """Extract every (subject, relation, object) triple from this image caption.
+
+Caption: "{caption}"
+
+Rules:
+- Subject and object must be concrete noun phrases (no pronouns)
+- Relation must be a single verb, preposition, or short phrase
+- Classify each relation as: SPATIAL, ACTION, or ATTRIBUTE
+  * SPATIAL: positional/spatial prepositions (on, under, near, beside, above, etc.)
+  * ACTION: verbs describing what someone/something is doing (hold, ride, eat, wear, etc.)
+  * ATTRIBUTE: copula + adjective/noun (is red, is large, is a dog, etc.)
+
+Output format — one triple per line, nothing else:
+subject | relation | object | TYPE
+
+Example output:
+woman | hold | dog | ACTION
+dog | on | leash | SPATIAL
+woman | near | bench | SPATIAL
+bench | be | wooden | ATTRIBUTE"""
+
+    def __init__(self, api_key: str, fallback_extractor: "TripleExtractor | None" = None):
+        import together
+        self.client   = together.Together(api_key=api_key)
+        self.fallback = fallback_extractor   # spaCy fallback if API fails
+
+    def extract(self, caption: str) -> list[Triple]:
+        """Extract triples using Mistral-7B, falling back to spaCy on failure."""
+        try:
+            return self._extract_llm(caption)
+        except Exception as e:
+            print(f"[LLMTripleExtractor] API error: {e} — falling back to spaCy")
+            if self.fallback is not None:
+                return self.fallback.extract(caption)
+            return []
+
+    def _extract_llm(self, caption: str) -> list[Triple]:
+        response = self.client.chat.completions.create(
+            model=self.MODEL,
+            messages=[
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user",   "content": self.USER_TEMPLATE.format(caption=caption)},
+            ],
+            max_tokens=300,
+            temperature=0.0,   # deterministic extraction
+        )
+        raw = response.choices[0].message.content.strip()
+        return self._parse_output(raw)
+
+    def _parse_output(self, raw: str) -> list[Triple]:
+        triples = []
+        seen    = set()
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or "|" not in line:
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) < 3:
+                continue
+            s, r, o = parts[0], parts[1], parts[2]
+            if not s or not o or not r:
+                continue
+            # Relation type — use LLM output if valid, else classify from relation string
+            rel_type = parts[3].upper().strip() if len(parts) >= 4 else ""
+            if rel_type not in RELATION_TYPES:
+                rel_type = classify_relation(r)
+            key = (s.lower(), r.lower(), o.lower())
+            if key not in seen:
+                seen.add(key)
+                triples.append(Triple(
+                    subject=s, relation=r, obj=o, relation_type=rel_type
+                ))
+        return triples
+
+    def extract_batch(self, captions: list[str]) -> list[list[Triple]]:
+        return [self.extract(c) for c in captions]
+
+
+# ---------------------------------------------------------------------------
 # Quick test
 # ---------------------------------------------------------------------------
 

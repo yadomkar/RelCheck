@@ -22,7 +22,7 @@ from typing import Optional
 
 from PIL import Image
 
-from triple_extractor import Triple, TripleExtractor
+from triple_extractor import Triple, TripleExtractor, LLMTripleExtractor
 from relation_verifier import RelationVerifier
 from corrector import MinimalCorrector, RuleBasedCorrector
 
@@ -105,18 +105,35 @@ class RelCheckPipeline:
         detection_only:      bool           = False,
         skip_spatial:        bool           = False,
         skip_vqa:            bool           = False,
+        # Cross-model verification: inject LLaVA model + processor
+        llava_model=None,
+        llava_processor=None,
+        # LLM-based triple extraction (Mistral via Together.ai)
+        use_llm_extractor:   bool           = False,
     ):
         print("[RelCheckPipeline] Initializing...")
+        api_key = together_api_key or os.environ.get("TOGETHER_API_KEY")
 
-        # Stage 1
-        self.extractor = TripleExtractor()
+        # Stage 1: Triple Extractor
+        spacy_extractor = TripleExtractor()
+        if use_llm_extractor and api_key:
+            print("[RelCheckPipeline] Using LLM-based triple extractor (Mistral).")
+            self.extractor = LLMTripleExtractor(
+                api_key=api_key,
+                fallback_extractor=spacy_extractor,
+            )
+        else:
+            self.extractor = spacy_extractor
 
-        # Stage 2
-        self.verifier = RelationVerifier()
+        # Stage 2: Relation Verifier
+        self.verifier = RelationVerifier(
+            llava_model=llava_model,
+            llava_processor=llava_processor,
+        )
         self.verifier.skip_spatial = skip_spatial
         self.verifier.skip_vqa     = skip_vqa
 
-        # Stage 3
+        # Stage 3: Corrector
         self.detection_only = detection_only
         if detection_only:
             print("[RelCheckPipeline] Detection-only mode — correction disabled.")
@@ -124,7 +141,6 @@ class RelCheckPipeline:
         elif use_rule_corrector:
             self.corrector = RuleBasedCorrector()
         else:
-            api_key = together_api_key or os.environ.get("TOGETHER_API_KEY")
             if api_key:
                 self.corrector = MinimalCorrector(api_key=api_key, extractor=self.extractor)
             else:

@@ -391,51 +391,176 @@ class SpatialVerifier:
 
 
 # ---------------------------------------------------------------------------
+# LLaVA Verifier  (independent cross-model verification)
+# ---------------------------------------------------------------------------
+
+class LLaVAVerifier:
+    """
+    Uses LLaVA-1.5-7B to verify action/attribute triples — fully independent
+    from BLIP-2, eliminating the circular self-verification problem.
+
+    The model and processor are injected from outside (shared from the notebook)
+    to avoid loading a second copy and to stay within VRAM budget on A100.
+
+    Uses the same token-probability approach as VQAVerifier: reads yes/no logit
+    mass at the first generated token rather than greedy-decoded text.
+    """
+
+    CONVERSATION_TEMPLATE = "USER: <image>\n{question} Answer with yes or no only. ASSISTANT:"
+
+    def __init__(self, model=None, processor=None):
+        """
+        Args:
+            model:     Pre-loaded LlavaForConditionalGeneration (injected from notebook).
+            processor: Pre-loaded LlavaProcessor (injected from notebook).
+        If both are None, the verifier will load its own copy (slower, uses more VRAM).
+        """
+        if model is not None and processor is not None:
+            self.model     = model
+            self.processor = processor
+            self.device    = next(model.parameters()).device
+            print("[LLaVAVerifier] Using injected LLaVA model.")
+        else:
+            self._load_model()
+
+    def _load_model(self, model_name: str = "llava-hf/llava-1.5-7b-hf"):
+        from transformers import LlavaForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
+        print(f"[LLaVAVerifier] Loading {model_name} in 8-bit ...")
+        self.device    = "cuda" if torch.cuda.is_available() else "cpu"
+        bnb            = BitsAndBytesConfig(load_in_8bit=True)
+        self.processor = AutoProcessor.from_pretrained(model_name)
+        self.model     = LlavaForConditionalGeneration.from_pretrained(
+            model_name, quantization_config=bnb, device_map="auto"
+        )
+        self.model.eval()
+        print("[LLaVAVerifier] Ready.")
+
+    def _build_question(self, triple: Triple) -> str:
+        """Reuse VQAVerifier's question builder (same question, different model)."""
+        s = _clean_query(triple.subject)
+        o = _clean_query(triple.obj)
+        r = triple.relation
+        if triple.relation_type == "ATTRIBUTE":
+            return f"Is the {s} {o}?"
+        if triple.relation_type == "SPATIAL":
+            return f"Is the {s} {r} the {o}?"
+        verb_ing = _to_present_participle(r)
+        return f"Is the {s} {verb_ing} the {o}?"
+
+    def verify(self, image: Image.Image, triple: Triple) -> tuple[bool, float]:
+        """
+        Verify a triple using LLaVA — fully independent from BLIP-2.
+        Returns (is_supported, confidence) using token-level yes/no probabilities.
+        """
+        question = self._build_question(triple)
+        prompt   = self.CONVERSATION_TEMPLATE.format(question=question)
+
+        inputs = self.processor(
+            text=prompt, images=image, return_tensors="pt"
+        ).to(self.device)
+
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=1,
+                output_scores=True,
+                return_dict_in_generate=True,
+            )
+
+        first_token_logits = outputs.scores[0][0].float()
+        probs = torch.softmax(first_token_logits, dim=-1)
+
+        yes_id = self.processor.tokenizer.encode("yes", add_special_tokens=False)[0]
+        no_id  = self.processor.tokenizer.encode("no",  add_special_tokens=False)[0]
+
+        yes_prob  = probs[yes_id].item()
+        no_prob   = probs[no_id].item()
+        total     = yes_prob + no_prob + 1e-9
+        yes_ratio = yes_prob / total
+        is_yes    = yes_ratio >= 0.5
+        confidence = max(yes_ratio, 1.0 - yes_ratio)
+
+        # Ambiguous zone → leave as uncertain
+        if 0.50 <= yes_ratio < 0.65:
+            confidence = 0.3
+
+        return is_yes, confidence
+
+    def verify_batch(self, image: Image.Image, triples: list[Triple]) -> list[tuple[bool, float]]:
+        return [self.verify(image, t) for t in triples]
+
+
+# ---------------------------------------------------------------------------
 # Combined Verifier (routes to the right strategy)
 # ---------------------------------------------------------------------------
 
 class RelationVerifier:
     """
     Top-level verifier that routes each triple to the appropriate strategy:
-      - SPATIAL   → SpatialVerifier  (OWL-ViT + geometry)
-      - ACTION    → VQAVerifier      (BLIP-2 Yes/No)
-      - ATTRIBUTE → VQAVerifier      (BLIP-2 Yes/No)
-      - OTHER     → VQAVerifier      (fallback)
+      - SPATIAL             → SpatialVerifier (OWL-ViT + geometry)
+                              fallback → LLaVA VQA if OWL-ViT confidence low
+      - ACTION / ATTRIBUTE  → LLaVAVerifier (independent cross-model VQA)
+                              fallback → BLIP-2 VQAVerifier if LLaVA not available
+      - OTHER               → LLaVAVerifier / VQAVerifier (fallback)
+
+    Using LLaVA for action/attribute verification eliminates the circular
+    self-verification problem (BLIP-2 verifying its own captions).
 
     Populates triple.hallucinated = True/False in place.
     """
 
-    # Only flag a triple as hallucinated if confidence is above this threshold
     CONFIDENCE_THRESHOLD = 0.45
 
-    def __init__(self):
-        self.vqa     = VQAVerifier()
-        self.spatial = SpatialVerifier()
+    def __init__(self, llava_model=None, llava_processor=None):
+        """
+        Args:
+            llava_model:     Injected LLaVA model for cross-model verification.
+            llava_processor: Injected LLaVA processor.
+        If LLaVA is not provided, falls back to BLIP-2 VQA (with yes-bias caveat).
+        """
+        self.spatial      = SpatialVerifier()
+        self.skip_spatial = False
+        self.skip_vqa     = False
+
+        if llava_model is not None:
+            self.llava = LLaVAVerifier(model=llava_model, processor=llava_processor)
+            self.vqa   = None   # BLIP-2 VQA not needed when LLaVA is available
+            print("[RelationVerifier] Using LLaVA for action/attribute verification.")
+        else:
+            self.llava = None
+            self.vqa   = VQAVerifier()
+            print("[RelationVerifier] LLaVA not available — using BLIP-2 VQA (yes-bias caveat).")
+
+    def _action_attr_verify(self, image: Image.Image, triple: Triple) -> tuple[bool, float]:
+        """Route action/attribute triple to LLaVA (preferred) or BLIP-2 VQA (fallback)."""
+        if self.llava is not None:
+            return self.llava.verify(image, triple)
+        return self.vqa.verify(image, triple)
 
     def verify_triple(self, image: Image.Image, triple: Triple) -> Triple:
         """
-        Verify one triple against the image. Sets triple.hallucinated in place.
+        Verify one triple. Sets triple.hallucinated in place.
 
-        For SPATIAL triples:
-          1. Try OWL-ViT + geometry first (more reliable when objects are detected)
-          2. If OWL-ViT confidence is too low (objects not found), fall back to BLIP-2 VQA
-             with a natural prepositional question: "Is the cat under the couch?"
-
-        Returns the same Triple object (modified).
+        Routing:
+          SPATIAL  → OWL-ViT geometry → LLaVA fallback if low confidence
+          ACTION / ATTRIBUTE / OTHER → LLaVA (or BLIP-2 if LLaVA unavailable)
         """
-        if triple.relation_type == "SPATIAL":
+        if triple.relation_type == "SPATIAL" and not self.skip_spatial:
             is_supported, conf = self.spatial.verify(image, triple)
-            # Fall back to VQA if OWL-ViT couldn't confidently detect the objects
             if conf < self.CONFIDENCE_THRESHOLD:
-                is_supported, conf = self.vqa.verify(image, triple)
+                # OWL-ViT couldn't find the objects — fall back to cross-model VQA
+                is_supported, conf = self._action_attr_verify(image, triple)
+        elif self.skip_vqa:
+            # ablation: VQA disabled
+            triple.hallucinated = None
+            return triple
         else:
-            is_supported, conf = self.vqa.verify(image, triple)
+            is_supported, conf = self._action_attr_verify(image, triple)
 
-        # Only mark as hallucinated if we're confident enough
         if conf >= self.CONFIDENCE_THRESHOLD:
             triple.hallucinated = not is_supported
         else:
-            triple.hallucinated = None   # uncertain — don't touch
+            triple.hallucinated = None   # uncertain
 
         return triple
 
