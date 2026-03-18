@@ -100,6 +100,11 @@ class VQAVerifier:
         """
         Ask BLIP-2 the yes/no question for this triple against the image.
 
+        Uses token-level probabilities rather than greedy decoding to avoid
+        BLIP-2's well-known yes-bias (it almost always decodes "yes" as text).
+        We instead look at the softmax probability of "yes" vs "no" at the first
+        token position — this gives a real confidence score.
+
         Returns:
             (is_supported, confidence)
             is_supported = True  → the relation IS in the image (not hallucinated)
@@ -114,15 +119,37 @@ class VQAVerifier:
         ).to(self.device, torch.float16 if self.device == "cuda" else torch.float32)
 
         with torch.no_grad():
-            generated_ids = self.model.generate(
+            outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=10,
+                max_new_tokens=1,
+                output_scores=True,
+                return_dict_in_generate=True,
             )
-        answer = self.processor.decode(generated_ids[0], skip_special_tokens=True).strip().lower()
 
-        # Parse the answer — BLIP-2 typically says "yes" or "no"
-        is_yes = answer.startswith("yes")
-        confidence = 0.9 if answer in ("yes", "no") else 0.6   # lower conf if ambiguous
+        # scores[0] is the logit distribution over the full vocabulary at step 0
+        first_token_logits = outputs.scores[0][0].float()   # shape: (vocab_size,)
+        probs = torch.softmax(first_token_logits, dim=-1)
+
+        # Get the token IDs for "yes" and "no" from the tokenizer
+        yes_id = self.processor.tokenizer.encode("yes", add_special_tokens=False)[0]
+        no_id  = self.processor.tokenizer.encode("no",  add_special_tokens=False)[0]
+
+        yes_prob = probs[yes_id].item()
+        no_prob  = probs[no_id].item()
+        total    = yes_prob + no_prob + 1e-9
+
+        # yes_ratio: fraction of yes vs (yes+no) mass
+        yes_ratio = yes_prob / total
+        is_yes    = yes_ratio >= 0.5
+
+        # Confidence = how strongly it leans one way (0.5 = uncertain, 1.0 = certain)
+        # We require yes_ratio > 0.65 to call "supported" — this combats yes-bias.
+        confidence = max(yes_ratio, 1.0 - yes_ratio)
+
+        # Override: if yes_ratio is in the ambiguous zone (0.50–0.65), treat as uncertain
+        # by returning low confidence so the caller leaves hallucinated=None.
+        if 0.50 <= yes_ratio < 0.65:
+            confidence = 0.3    # forces hallucinated=None (uncertain)
 
         return is_yes, confidence
 
