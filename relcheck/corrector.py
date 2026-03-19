@@ -68,7 +68,7 @@ class MinimalCorrector:
     the one broken relation.
     """
 
-    MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+    MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
 
     def __init__(self, api_key: Optional[str] = None, extractor: Optional[TripleExtractor] = None):
         """

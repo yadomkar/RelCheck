@@ -280,7 +280,7 @@ class LLMTripleExtractor:
     deterministically, with relation type classification included.
     """
 
-    MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+    MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
 
     SYSTEM_PROMPT = (
         "You are a precise information extraction engine. "
