@@ -249,7 +249,7 @@ class SpatialVerifier:
             dict mapping each query string to a list of BoundingBox detections
             (sorted by score, highest first).
         """
-        texts = [queries]   # OWL-ViT expects batch of lists
+        texts = [queries]   # OWL-ViT expects [[query1, query2]] for single image
 
         inputs = self.processor(text=texts, images=image, return_tensors="pt").to(self.device)
         with torch.no_grad():
@@ -545,16 +545,20 @@ class RelationVerifier:
           SPATIAL  → OWL-ViT geometry → LLaVA fallback if low confidence
           ACTION / ATTRIBUTE / OTHER → LLaVA (or BLIP-2 if LLaVA unavailable)
         """
+        # Route by relation type
         if triple.relation_type == "SPATIAL" and not self.skip_spatial:
             is_supported, conf = self.spatial.verify(image, triple)
             if conf < self.CONFIDENCE_THRESHOLD:
                 # OWL-ViT couldn't find the objects — fall back to cross-model VQA
+                if self.skip_vqa:
+                    triple.hallucinated = None
+                    return triple
                 is_supported, conf = self._action_attr_verify(image, triple)
-        elif self.skip_vqa:
-            # ablation: VQA disabled
-            triple.hallucinated = None
-            return triple
         else:
+            # ACTION / ATTRIBUTE / OTHER → VQA
+            if self.skip_vqa:
+                triple.hallucinated = None
+                return triple
             is_supported, conf = self._action_attr_verify(image, triple)
 
         if conf >= self.CONFIDENCE_THRESHOLD:

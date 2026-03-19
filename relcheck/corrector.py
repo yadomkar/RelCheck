@@ -60,7 +60,7 @@ Corrected caption:"""
 
 class MinimalCorrector:
     """
-    Calls Llama-3.1-8B-Instant (via Groq) to minimally rewrite a caption
+    Calls Llama-3.3-70B-Instruct-Turbo (via Together.ai) to minimally rewrite a caption
     when a hallucinated triple is detected.
 
     The key design principle: we only change the hallucinated triple's span.
@@ -89,7 +89,7 @@ class MinimalCorrector:
         print(f"[MinimalCorrector] Ready. Model: {self.MODEL}")
 
     def _call_llm(self, caption: str, triple: Triple) -> str:
-        """Call Llama-3.1-8B (Groq) to produce a corrected caption."""
+        """Call Llama-3.3-70B (Together.ai) to produce a corrected caption."""
         user_msg = CORRECTION_USER_TEMPLATE.format(
             caption=caption,
             relation=triple.relation,
@@ -160,6 +160,11 @@ class MinimalCorrector:
             corrected = self._call_llm(caption, triple)
         except Exception as e:
             print(f"[MinimalCorrector] API call failed: {e}")
+            return caption, False
+
+        # If LLM returned the original caption unchanged, no correction was made
+        if corrected.strip() == caption.strip():
+            print(f"[MinimalCorrector] LLM returned unchanged caption — no correction.")
             return caption, False
 
         if not self._self_consistency_check(caption, corrected):
