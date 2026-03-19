@@ -263,12 +263,12 @@ class TripleExtractor:
 
 
 # ---------------------------------------------------------------------------
-# LLM-based Triple Extractor  (Mistral-7B via Together.ai)
+# LLM-based Triple Extractor  (Llama-3.1-8B via Groq)
 # ---------------------------------------------------------------------------
 
 class LLMTripleExtractor:
     """
-    Uses Mistral-7B-Instruct via Together.ai to extract triples from captions.
+    Uses Llama-3.1-8B-Instant via Groq to extract triples from captions.
 
     Advantages over spaCy dependency parsing:
       - Handles complex sentence structures, passive voice, relative clauses
@@ -280,7 +280,7 @@ class LLMTripleExtractor:
     deterministically, with relation type classification included.
     """
 
-    MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    MODEL = "llama-3.1-8b-instant"
 
     SYSTEM_PROMPT = (
         "You are a precise information extraction engine. "
@@ -310,12 +310,12 @@ woman | near | bench | SPATIAL
 bench | be | wooden | ATTRIBUTE"""
 
     def __init__(self, api_key: str, fallback_extractor: "TripleExtractor | None" = None):
-        import together
-        self.client   = together.Together(api_key=api_key)
+        from groq import Groq
+        self.client   = Groq(api_key=api_key)
         self.fallback = fallback_extractor   # spaCy fallback if API fails
 
     def extract(self, caption: str) -> list[Triple]:
-        """Extract triples using Mistral-7B, falling back to spaCy on failure."""
+        """Extract triples using Llama-3.1-8B (Groq), falling back to spaCy on failure."""
         try:
             return self._extract_llm(caption)
         except Exception as e:

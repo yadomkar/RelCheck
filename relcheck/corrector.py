@@ -60,7 +60,7 @@ Corrected caption:"""
 
 class MinimalCorrector:
     """
-    Calls Mistral-7B-Instruct (via Together.ai) to minimally rewrite a caption
+    Calls Llama-3.1-8B-Instant (via Groq) to minimally rewrite a caption
     when a hallucinated triple is detected.
 
     The key design principle: we only change the hallucinated triple's span.
@@ -68,7 +68,7 @@ class MinimalCorrector:
     the one broken relation.
     """
 
-    MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    MODEL = "llama-3.1-8b-instant"
 
     def __init__(self, api_key: Optional[str] = None, extractor: Optional[TripleExtractor] = None):
         """
@@ -77,19 +77,19 @@ class MinimalCorrector:
             extractor: A TripleExtractor instance for self-consistency checking.
                        If None, self-consistency check is skipped.
         """
-        import together   # pip install together
-        api_key = api_key or os.environ.get("TOGETHER_API_KEY")
+        from groq import Groq  # pip install groq
+        api_key = api_key or os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise ValueError(
-                "No Together.ai API key found. Set TOGETHER_API_KEY environment variable "
-                "or pass api_key= to MinimalCorrector()."
+                "No Groq API key found. Set GROQ_API_KEY environment variable "
+                "or pass api_key= to MinimalCorrector(). Get a free key at console.groq.com"
             )
-        self.client = together.Together(api_key=api_key)
+        self.client = Groq(api_key=api_key)
         self.extractor = extractor
         print(f"[MinimalCorrector] Ready. Model: {self.MODEL}")
 
     def _call_llm(self, caption: str, triple: Triple) -> str:
-        """Call Mistral-7B to produce a corrected caption."""
+        """Call Llama-3.1-8B (Groq) to produce a corrected caption."""
         user_msg = CORRECTION_USER_TEMPLATE.format(
             caption=caption,
             relation=triple.relation,
@@ -105,7 +105,6 @@ class MinimalCorrector:
             ],
             max_tokens=200,
             temperature=0.2,      # low temperature = more deterministic, less creative
-            repetition_penalty=1.1,
         )
 
         corrected = response.choices[0].message.content.strip()
