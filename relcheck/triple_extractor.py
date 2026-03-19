@@ -280,7 +280,7 @@ class LLMTripleExtractor:
     deterministically, with relation type classification included.
     """
 
-    MODEL = "llama-3.1-8b-instant"
+    MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 
     SYSTEM_PROMPT = (
         "You are a precise information extraction engine. "
@@ -310,8 +310,8 @@ woman | near | bench | SPATIAL
 bench | be | wooden | ATTRIBUTE"""
 
     def __init__(self, api_key: str, fallback_extractor: "TripleExtractor | None" = None):
-        from groq import Groq
-        self.client   = Groq(api_key=api_key)
+        import together
+        self.client   = together.Together(api_key=api_key)
         self.fallback = fallback_extractor   # spaCy fallback if API fails
 
     def extract(self, caption: str) -> list[Triple]:

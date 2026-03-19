@@ -68,7 +68,7 @@ class MinimalCorrector:
     the one broken relation.
     """
 
-    MODEL = "llama-3.1-8b-instant"
+    MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 
     def __init__(self, api_key: Optional[str] = None, extractor: Optional[TripleExtractor] = None):
         """
@@ -77,14 +77,14 @@ class MinimalCorrector:
             extractor: A TripleExtractor instance for self-consistency checking.
                        If None, self-consistency check is skipped.
         """
-        from groq import Groq  # pip install groq
-        api_key = api_key or os.environ.get("GROQ_API_KEY")
+        import together
+        api_key = api_key or os.environ.get("TOGETHER_API_KEY")
         if not api_key:
             raise ValueError(
-                "No Groq API key found. Set GROQ_API_KEY environment variable "
-                "or pass api_key= to MinimalCorrector(). Get a free key at console.groq.com"
+                "No Together.ai API key found. Set TOGETHER_API_KEY environment variable "
+                "or pass api_key= to MinimalCorrector()."
             )
-        self.client = Groq(api_key=api_key)
+        self.client = together.Together(api_key=api_key)
         self.extractor = extractor
         print(f"[MinimalCorrector] Ready. Model: {self.MODEL}")
 
