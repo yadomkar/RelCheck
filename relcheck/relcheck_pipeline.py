@@ -201,11 +201,24 @@ class RelCheckPipeline:
         hallucinated = [t for t in triples if t.hallucinated is True]
         print(f"[Pipeline] Hallucinated: {len(hallucinated)}/{len(triples)}")
 
+        # ── Stage 2b: Gather VQA evidence for hallucinated triples ─────────
+        if hallucinated and not self.detection_only:
+            print("[Pipeline] Gathering VQA evidence for guided correction...")
+            self.verifier.gather_evidence_batch(image, triples)
+
         # ── Stage 3: Correct hallucinations ──────────────────────────────────
         if self.detection_only or not hallucinated or self.corrector is None:
             corrected_caption = caption
         else:
             corrected_caption = self.corrector.correct_all(caption, triples)
+
+            # ── Stage 3b: Correction validation ──────────────────────────────
+            # Re-verify corrected triples through VQA. If the correction still
+            # fails verification, revert to the original caption.
+            if corrected_caption != caption:
+                corrected_caption = self._validate_correction(
+                    image, caption, corrected_caption, triples
+                )
 
         return RelCheckResult(
             image_path=image_path,
@@ -213,6 +226,61 @@ class RelCheckPipeline:
             corrected_caption=corrected_caption,
             triples=triples,
         )
+
+    def _validate_correction(
+        self,
+        image: Image.Image,
+        original_caption: str,
+        corrected_caption: str,
+        triples: list[Triple],
+    ) -> str:
+        """
+        Re-verify the corrected caption by re-extracting triples and checking
+        the previously-hallucinated relations through VQA. If the correction
+        made things worse (still fails verification), revert to the original.
+
+        This prevents bad corrections from surviving the pipeline.
+        """
+        try:
+            # Re-extract triples from the corrected caption
+            new_triples = self.extractor.extract(corrected_caption)
+            if not new_triples:
+                print("[Pipeline] Validation: no triples in corrected caption — keeping correction.")
+                return corrected_caption
+
+            # Get the hallucinated relations from the original
+            orig_hallucinated = {
+                (t.subject.lower(), t.obj.lower())
+                for t in triples if t.hallucinated is True
+            }
+
+            # Check if any of the corrected triples (matching same subj/obj pairs)
+            # still fail VQA verification
+            failed_count = 0
+            checked_count = 0
+            for nt in new_triples:
+                pair = (nt.subject.lower(), nt.obj.lower())
+                if pair in orig_hallucinated:
+                    checked_count += 1
+                    self.verifier.verify_triple(image, nt)
+                    if nt.hallucinated is True:
+                        failed_count += 1
+                        print(f"  [Validation] Still fails: ({nt.subject}, {nt.relation}, {nt.obj})")
+
+            if checked_count > 0 and failed_count == checked_count:
+                # ALL corrected triples still fail — revert
+                print(f"[Pipeline] Validation FAILED ({failed_count}/{checked_count} still hallucinated) — reverting.")
+                return original_caption
+            elif failed_count > 0:
+                print(f"[Pipeline] Validation partial ({failed_count}/{checked_count} still fail) — keeping correction.")
+            else:
+                print(f"[Pipeline] Validation PASSED ({checked_count} triples verified).")
+
+            return corrected_caption
+
+        except Exception as e:
+            print(f"[Pipeline] Validation error: {e} — keeping correction.")
+            return corrected_caption
 
     def run_batch(
         self,

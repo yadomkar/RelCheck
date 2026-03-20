@@ -47,8 +47,20 @@ CORRECTION_USER_TEMPLATE = """Original caption: "{caption}"
 
 The relation '{relation}' between '{subject}' and '{object}' has been verified to \
 be incorrect — it is not supported by the image.
-
+{evidence_line}
 Rewrite the caption with a minimal fix for this one relation only. \
+Keep everything else exactly the same.
+
+Corrected caption:"""
+
+CORRECTION_USER_TEMPLATE_WITH_EVIDENCE = """Original caption: "{caption}"
+
+The relation '{relation}' between '{subject}' and '{object}' has been verified to \
+be incorrect — it is not supported by the image.
+According to the image, the actual relationship is: {evidence}
+
+Rewrite the caption with a minimal fix for this one relation only, \
+using the evidence above to choose the correct replacement. \
 Keep everything else exactly the same.
 
 Corrected caption:"""
@@ -99,13 +111,24 @@ class MinimalCorrector:
         print(f"[MinimalCorrector] Ready. Model: {self.MODEL}")
 
     def _call_llm(self, caption: str, triple: Triple) -> str:
-        """Call Llama-3.3-70B (Together.ai) to produce a corrected caption."""
-        user_msg = CORRECTION_USER_TEMPLATE.format(
-            caption=caption,
-            relation=triple.relation,
-            subject=triple.subject,
-            object=triple.obj,
-        )
+        """Call Llama-3.3-70B (Together.ai) to produce a corrected caption.
+        Uses VQA evidence when available for guided correction."""
+        if triple.vqa_evidence:
+            user_msg = CORRECTION_USER_TEMPLATE_WITH_EVIDENCE.format(
+                caption=caption,
+                relation=triple.relation,
+                subject=triple.subject,
+                object=triple.obj,
+                evidence=triple.vqa_evidence,
+            )
+        else:
+            user_msg = CORRECTION_USER_TEMPLATE.format(
+                caption=caption,
+                relation=triple.relation,
+                subject=triple.subject,
+                object=triple.obj,
+                evidence_line="",
+            )
 
         response = self.client.chat.completions.create(
             model=self.MODEL,
@@ -186,10 +209,14 @@ class MinimalCorrector:
         return corrected, True
 
     def _call_llm_batch(self, caption: str, hallucinated_triples: list[Triple]) -> str:
-        """Call Llama-3.3-70B to correct ALL hallucinated triples in one pass."""
+        """Call Llama-3.3-70B to correct ALL hallucinated triples in one pass.
+        Includes VQA evidence when available."""
         lines = []
         for i, t in enumerate(hallucinated_triples, 1):
-            lines.append(f"  {i}. '{t.relation}' between '{t.subject}' and '{t.obj}'")
+            line = f"  {i}. '{t.relation}' between '{t.subject}' and '{t.obj}'"
+            if t.vqa_evidence:
+                line += f" (image actually shows: {t.vqa_evidence})"
+            lines.append(line)
         hallucination_list = "\n".join(lines)
 
         user_msg = BATCH_CORRECTION_USER_TEMPLATE.format(

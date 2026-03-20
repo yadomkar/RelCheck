@@ -1,5 +1,5 @@
 # Memory — CS298 / RelCheck
-**Last updated:** 2026-03-19 (Session 2)
+**Last updated:** 2026-03-20 (Session 3)
 
 ---
 
@@ -180,36 +180,51 @@ This directly measures caption quality because the LLM can ONLY use the caption.
 
 ---
 
-## Status (as of 2026-03-19, Session 2 end)
+## Status (as of 2026-03-20, Session 3)
 
-- **Code changes committed + pushed to GitHub** (commit `60a6200`)
-- All 4 design flaws fixed + 2 optimizations added
-- **Next step: pull in Colab (`git pull`) and re-run Section 6 (full pipeline on 600 images)**
-- Expect correction count to increase significantly (119 → 200+)
-- Then write + run LLM-judge R-POPE evaluation
-- Ablation study was running overnight from Session 1 — check results
-- Together.ai API key active and working with Llama-3.3-70B-Instruct-Turbo
-- Google Drive persistence working: images cached in `MyDrive/RelCheck_Data/images/`
+- **Session 2 code changes**: committed + pushed to GitHub (commit `60a6200`)
+- **Session 3 additions**: eval_cells.py updated with Cell 0 (metrics helper), Cell D (B3 baseline), Cell E (pivot test)
+- **Ablation results confirmed**: ALL ablation variants produce identical R-POPE (VQA) scores (~75.4%), proving R-POPE (VQA) is insensitive — this is expected, not a bug
+- **Critical finding**: Need LLM direct-correction baseline (B3) to prove structured pipeline adds value
+- **eval_cells.py now contains**: Cell 0 (compute_rpope_metrics), Cell A (LLM-judge R-POPE), Cell B (CLIPScore), Cell C (Filtered R-POPE), Cell D (B3 LLM direct-correction), Cell E (pivot test: B3 vs RelCheck)
+
+### Literature Review (Session 3)
+- **Reefknot (ACL Findings 2025)**: Closest competitor — Detect-Then-Calibrate for relation hallucinations, but modifies internal model probabilities (not black-box), no corrected caption output
+- **RelCheck differentiators vs Reefknot**: (1) explicit corrected captions, (2) type-aware geometric+VQA verification, (3) training-free black-box approach, (4) interpretable per-triple decisions
 
 ---
 
-## Revised Plan — 7 Days Remaining (~April 1 deadline)
+## Session 3 Weaknesses Identified + Fixes
+
+| # | Weakness | Fix | Status |
+|---|----------|-----|--------|
+| 1 | R-POPE (VQA) insensitive to caption changes | LLM-judge R-POPE (Cell A) | ✅ Written |
+| 2 | Missing LLM direct-correction baseline | B3 baseline (Cell D) + pivot test (Cell E) | ✅ Written |
+| 3 | Small effect size (119/600 corrected) | Re-run with Session 2 fixes; expect 200+ | ⬜ Needs re-run |
+| 4 | Triple extraction quality unknown | Manual analysis of 30-50 captions | ⬜ Pending |
+| 5 | No threshold sensitivity analysis | Vary yes_ratio 0.50→0.70, plot accuracy curve | ⬜ Pending |
+| 6 | No runtime profiling | Add timing to pipeline loop | ⬜ Pending |
+| 7 | Single captioning model (BLIP-2 only) | InstructBLIP generalizability run | ⬜ Pending |
+
+---
+
+## Revised Plan — 6 Days Remaining (~April 1 deadline)
 
 | Day | Task | Time Est |
 |-----|------|----------|
-| **Day 3 (Mar 20)** | Pull new code in Colab; Re-run full pipeline (Section 6) with fixes; Check ablation results from overnight | 4 hrs |
-| **Day 4 (Mar 21)** | Write + run LLM-judge R-POPE; CLIPScore cell; Filtered R-POPE analysis | 4 hrs |
-| **Day 5 (Mar 22)** | R-CHAIR annotation (50 images manual); InstructBLIP generalizability run | 4 hrs |
-| **Day 6 (Mar 23)** | Error analysis, qualitative examples, runtime profiling | 3 hrs |
+| **Day 3 (Mar 20)** | ★ Run Cell D+E (pivot test, 50 imgs, ~25 min); git pull + re-run Section 6 (600 imgs) | 4 hrs |
+| **Day 4 (Mar 21)** | Run Cell A (LLM-judge R-POPE, full 600); Cell B (CLIPScore); Cell C (Filtered) | 4 hrs |
+| **Day 5 (Mar 22)** | R-CHAIR annotation (50 images manual); InstructBLIP generalizability | 4 hrs |
+| **Day 6 (Mar 23)** | Error analysis, qualitative examples, runtime profiling, threshold sensitivity | 3 hrs |
 | **Day 7-8 (Mar 24-25)** | Publication-quality figures + LaTeX tables | 6 hrs |
 | **Day 9-10 (Mar 26-27)** | Code cleanup, README, requirements.txt, final report | 4 hrs |
 
-### Priority Order for Next Session
-1. Pull new code in Colab: `!cd /content/RelCheck && git pull`
-2. Re-run full pipeline with all fixes (Section 6)
-3. Compare new correction count to old (119) — should see big jump
-4. Write + run LLM-judge R-POPE cell
-5. R-CHAIR annotation (50 images)
+### Priority Order for RIGHT NOW
+1. **Run Cell 0 + Cell D + Cell E** (pivot test — 25 min, uses existing B1 captions, NO re-run needed)
+2. **Decision point**: Does RelCheck beat B3? If yes → proceed. If no → pivot strategy.
+3. `git pull` in Colab → re-run Section 6 (full pipeline with Session 2 fixes)
+4. Run Cell A (LLM-judge R-POPE) on new results
+5. Remaining eval cells (B, C)
 
 ---
 

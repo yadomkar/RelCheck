@@ -167,9 +167,11 @@ class VQAVerifier:
         # We require yes_ratio > 0.65 to call "supported" — this combats yes-bias.
         confidence = max(yes_ratio, 1.0 - yes_ratio)
 
-        # Override: if yes_ratio is in the ambiguous zone (0.50–0.65), treat as uncertain
+        # Override: if yes_ratio is in the ambiguous zone (0.40–0.65), treat as uncertain
         # by returning low confidence so the caller leaves hallucinated=None.
-        if 0.50 <= yes_ratio < 0.65:
+        # Tightened from [0.50, 0.65): only flag hallucination below 0.40 to reduce
+        # false positives (over-correction).
+        if 0.40 <= yes_ratio < 0.65:
             confidence = 0.3    # forces hallucinated=None (uncertain)
 
         return is_yes, confidence
@@ -613,11 +615,57 @@ class LLaVAVerifier:
         is_yes = avg_yes_ratio >= 0.5
         confidence = max(avg_yes_ratio, 1.0 - avg_yes_ratio)
 
-        # Ambiguous zone → uncertain (narrower with multi-question voting)
-        if 0.50 <= avg_yes_ratio < 0.65:
+        # Ambiguous zone → uncertain (tightened: only flag hallucination below 0.40)
+        # This reduces false positives — corrections only happen when VQA is
+        # fairly confident the relation is wrong.
+        if 0.40 <= avg_yes_ratio < 0.65:
             confidence = 0.3
 
         return is_yes, confidence
+
+    def gather_evidence(self, image: Image.Image, triple: Triple) -> str:
+        """
+        Ask LLaVA an open-ended descriptive question about the relationship
+        between subject and object. Returns a short text answer that can be
+        fed to the corrector as evidence for guided correction.
+
+        This replaces "blind correction" where the LLM had to guess the right
+        relation without any image-grounded evidence.
+        """
+        s = _clean_query_for_vqa(triple.subject)
+        o = _clean_query_for_vqa(triple.obj)
+
+        if triple.relation_type == "SPATIAL":
+            question = f"Where is the {s} relative to the {o}? Answer in a few words."
+        elif triple.relation_type == "ATTRIBUTE":
+            question = f"How would you describe the {s}? Answer in a few words."
+        else:
+            # ACTION / OTHER / INSTRUMENTAL
+            question = f"What is the {s} doing with or near the {o}? Answer in a few words."
+
+        prompt = self.CONVERSATION_TEMPLATE.replace(
+            "Answer with yes or no only.", ""
+        ).format(question=question)
+
+        inputs = self.processor(
+            text=prompt, images=image, return_tensors="pt"
+        ).to(self.device)
+
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=30,
+                temperature=0.2,
+                do_sample=False,
+            )
+
+        # Decode only the new tokens (skip the input prompt tokens)
+        input_len = inputs["input_ids"].shape[1]
+        answer = self.processor.tokenizer.decode(
+            output_ids[0][input_len:], skip_special_tokens=True
+        ).strip()
+
+        return answer
 
     def verify_batch(self, image: Image.Image, triples: list[Triple]) -> list[tuple[bool, float]]:
         return [self.verify(image, t) for t in triples]
@@ -711,6 +759,32 @@ class RelationVerifier:
         for triple in triples:
             self.verify_triple(image, triple)
         return triples
+
+    def gather_evidence(self, image: Image.Image, triple: Triple) -> str:
+        """
+        Gather descriptive VQA evidence for a hallucinated triple.
+        Uses LLaVA to describe what the image actually shows for this relationship.
+        Falls back to empty string if LLaVA is unavailable.
+        """
+        if self.llava is not None:
+            try:
+                return self.llava.gather_evidence(image, triple)
+            except Exception as e:
+                print(f"[RelationVerifier] Evidence gathering failed: {e}")
+                return ""
+        return ""
+
+    def gather_evidence_batch(self, image: Image.Image, triples: list[Triple]) -> None:
+        """
+        Gather VQA evidence for all hallucinated triples and store in triple.vqa_evidence.
+        Only queries triples where hallucinated=True.
+        """
+        for t in triples:
+            if t.hallucinated is True:
+                evidence = self.gather_evidence(image, t)
+                t.vqa_evidence = evidence
+                if evidence:
+                    print(f"  [Evidence] ({t.subject}, {t.relation}, {t.obj}) → \"{evidence}\"")
 
 
 # ---------------------------------------------------------------------------

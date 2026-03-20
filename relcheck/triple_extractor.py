@@ -60,6 +60,7 @@ class Triple:
     confidence: float = 1.0
     hallucinated: Optional[bool] = None
     correction: Optional[str] = None
+    vqa_evidence: Optional[str] = None   # descriptive VQA answer for guided correction
 
     def __str__(self):
         tag = f"[{self.relation_type}]"
@@ -78,6 +79,7 @@ class Triple:
             "relation_type": self.relation_type,
             "hallucinated": self.hallucinated,
             "correction": self.correction,
+            "vqa_evidence": self.vqa_evidence,
         }
 
 
