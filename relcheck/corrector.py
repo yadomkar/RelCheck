@@ -37,7 +37,7 @@ CORRECTION_SYSTEM_PROMPT = """You are a precise caption editor. Your job is to f
 factual errors in image captions — specifically incorrect relationship descriptions.
 
 Rules:
-1. Change ONLY the specific incorrect relation. Do not rewrite the whole caption.
+1. Change ONLY the specific incorrect relation(s). Do not rewrite the whole caption.
 2. Keep all other words, objects, and descriptions exactly the same.
 3. If you are not sure what the correct relation is, use the most neutral option \
    (e.g. "near" instead of a specific spatial relation).
@@ -50,6 +50,16 @@ be incorrect — it is not supported by the image.
 
 Rewrite the caption with a minimal fix for this one relation only. \
 Keep everything else exactly the same.
+
+Corrected caption:"""
+
+BATCH_CORRECTION_USER_TEMPLATE = """Original caption: "{caption}"
+
+The following relations have been verified to be incorrect — they are not supported by the image:
+{hallucination_list}
+
+Rewrite the caption with minimal fixes for ALL of the above incorrect relations. \
+Keep everything else exactly the same. Fix them all in one pass.
 
 Corrected caption:"""
 
@@ -175,30 +185,89 @@ class MinimalCorrector:
         triple.correction = corrected
         return corrected, True
 
+    def _call_llm_batch(self, caption: str, hallucinated_triples: list[Triple]) -> str:
+        """Call Llama-3.3-70B to correct ALL hallucinated triples in one pass."""
+        lines = []
+        for i, t in enumerate(hallucinated_triples, 1):
+            lines.append(f"  {i}. '{t.relation}' between '{t.subject}' and '{t.obj}'")
+        hallucination_list = "\n".join(lines)
+
+        user_msg = BATCH_CORRECTION_USER_TEMPLATE.format(
+            caption=caption,
+            hallucination_list=hallucination_list,
+        )
+
+        response = self.client.chat.completions.create(
+            model=self.MODEL,
+            messages=[
+                {"role": "system", "content": CORRECTION_SYSTEM_PROMPT},
+                {"role": "user",   "content": user_msg},
+            ],
+            max_tokens=200,
+            temperature=0.2,
+        )
+
+        corrected = response.choices[0].message.content.strip()
+        corrected = corrected.strip('"').strip("'").strip()
+        return corrected
+
     def correct_all(self, caption: str, triples: list[Triple]) -> str:
         """
-        Correct all hallucinated triples in sequence.
+        Correct all hallucinated triples.
 
-        We process one at a time, passing the (already corrected) caption into
-        each successive correction. This means later corrections see the already-
-        fixed caption, which avoids double-editing the same span.
+        Strategy:
+          - 1 hallucinated triple  → single correction call (original behavior)
+          - 2+ hallucinated triples → batch correction in one LLM call
+            (avoids cascading errors from sequential edits)
 
         Returns:
             The final corrected caption.
         """
+        hallucinated = [t for t in triples if t.hallucinated is True]
+
+        if not hallucinated:
+            print("[MinimalCorrector] No corrections were needed.")
+            return caption
+
+        # Single hallucination: use original targeted correction
+        if len(hallucinated) == 1:
+            print(f"[MinimalCorrector] Correcting: {hallucinated[0]}")
+            corrected, applied = self.correct_triple(caption, hallucinated[0])
+            if not applied:
+                print("[MinimalCorrector] Correction failed checks.")
+            return corrected
+
+        # Multiple hallucinations: batch correction in one LLM call
+        print(f"[MinimalCorrector] Batch-correcting {len(hallucinated)} triples:")
+        for t in hallucinated:
+            print(f"  → {t}")
+
+        try:
+            corrected = self._call_llm_batch(caption, hallucinated)
+        except Exception as e:
+            print(f"[MinimalCorrector] Batch API call failed: {e} — falling back to sequential")
+            return self._correct_sequential(caption, triples)
+
+        if not self._self_consistency_check(caption, corrected):
+            print(f"[MinimalCorrector] Batch self-consistency failed — falling back to sequential")
+            return self._correct_sequential(caption, triples)
+
+        # Record corrections on the triples
+        for t in hallucinated:
+            t.correction = corrected
+        return corrected
+
+    def _correct_sequential(self, caption: str, triples: list[Triple]) -> str:
+        """Fallback: correct hallucinated triples one at a time (original behavior)."""
         current_caption = caption
         corrections_made = 0
-
         for triple in triples:
             if triple.hallucinated is True:
-                print(f"[MinimalCorrector] Correcting: {triple}")
                 current_caption, applied = self.correct_triple(current_caption, triple)
                 if applied:
                     corrections_made += 1
-
         if corrections_made == 0:
-            print("[MinimalCorrector] No corrections were needed or all failed checks.")
-
+            print("[MinimalCorrector] Sequential fallback: no corrections applied.")
         return current_caption
 
 

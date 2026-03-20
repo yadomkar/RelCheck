@@ -110,6 +110,8 @@ class RelCheckPipeline:
         llava_processor=None,
         # LLM-based triple extraction (Mistral via Together.ai)
         use_llm_extractor:   bool           = False,
+        # Multi-question VQA voting (VisMin-inspired)
+        num_paraphrases:     int            = 3,
     ):
         print("[RelCheckPipeline] Initializing...")
         api_key = together_api_key or os.environ.get("TOGETHER_API_KEY")
@@ -125,10 +127,11 @@ class RelCheckPipeline:
         else:
             self.extractor = spacy_extractor
 
-        # Stage 2: Relation Verifier
+        # Stage 2: Relation Verifier (with multi-question VQA voting)
         self.verifier = RelationVerifier(
             llava_model=llava_model,
             llava_processor=llava_processor,
+            num_paraphrases=num_paraphrases,
         )
         self.verifier.skip_spatial = skip_spatial
         self.verifier.skip_vqa     = skip_vqa

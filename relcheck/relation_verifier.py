@@ -24,19 +24,40 @@ from triple_extractor import Triple, SPATIAL_KEYWORDS
 
 
 # ---------------------------------------------------------------------------
-# Query cleaning utility
+# Query cleaning utilities
 # ---------------------------------------------------------------------------
 
-_STOP_WORDS = {"a", "an", "the", "two", "three", "four", "some", "many", "several", "old"}
+# Aggressive cleaning for OWL-ViT: strip all determiners + adjectives that
+# confuse the open-vocabulary detector.
+_OWLVIT_STOP_WORDS = {"a", "an", "the", "two", "three", "four", "some", "many", "several", "old"}
 
 def _clean_query(text: str) -> str:
     """
     Strip leading articles/determiners so OWL-ViT gets clean noun phrases.
     "a cat" → "cat", "an old man" → "man", "two toy cars" → "toy cars"
     OWL-ViT text-matching works significantly better without determiners.
+    Only used for SpatialVerifier.detect().
     """
     words = text.strip().split()
-    while words and words[0].lower() in _STOP_WORDS:
+    while words and words[0].lower() in _OWLVIT_STOP_WORDS:
+        words = words[1:]
+    return " ".join(words) if words else text.strip()
+
+
+# Light cleaning for VQA questions: strip ONLY articles (a/an/the),
+# keep adjectives like "old", "red", "large" for question specificity.
+_VQA_STOP_WORDS = {"a", "an", "the"}
+
+def _clean_query_for_vqa(text: str) -> str:
+    """
+    Light cleaning for VQA question building — strip only articles.
+    Keeps adjectives so questions remain specific:
+    "an old man" → "old man" (NOT "man")
+    "a red car"  → "red car"  (NOT "car")
+    This matters when multiple similar entities exist in the image.
+    """
+    words = text.strip().split()
+    while words and words[0].lower() in _VQA_STOP_WORDS:
         words = words[1:]
     return " ".join(words) if words else text.strip()
 
@@ -74,15 +95,15 @@ class VQAVerifier:
     def _build_question(self, triple: Triple) -> str:
         """
         Turn a triple into a natural yes/no question.
+        Uses light cleaning (articles only) to keep adjectives for specificity.
 
         Examples:
-            (woman, hold, dog)   → "Is the woman holding the dog?"
-            (car, be, red)       → "Is the car red?"
-            (cat, under, couch)  → "Is the cat under the couch?"
-            (couple, on, escalator) → "Is the couple on the escalator?"
+            (old woman, hold, dog)   → "Is the old woman holding the dog?"
+            (car, be, red)           → "Is the car red?"
+            (cat, under, couch)      → "Is the cat under the couch?"
         """
-        s = _clean_query(triple.subject)
-        o = _clean_query(triple.obj)
+        s = _clean_query_for_vqa(triple.subject)
+        o = _clean_query_for_vqa(triple.obj)
         r = triple.relation
 
         if triple.relation_type == "ATTRIBUTE":
@@ -213,9 +234,13 @@ class BoundingBox:
 
 class SpatialVerifier:
     """
-    Uses OWL-ViT (open-vocabulary object detector) to find bounding boxes for
+    Uses an open-vocabulary object detector to find bounding boxes for
     the subject and object in a triple, then checks the spatial relation using
     simple geometry.
+
+    Supports both OWL-ViT v1 and OWLv2. OWLv2 (google/owlv2-base-patch16-ensemble)
+    is recommended — it has significantly better detection accuracy on complex scenes
+    (see VisMin, NeurIPS 2024, which uses Grounding DINO for similar reasons).
 
     Why this is better than VQA for spatial relations:
         VQA models are notoriously bad at spatial reasoning (Kamath et al., 2023,
@@ -223,23 +248,36 @@ class SpatialVerifier:
         is deterministic and doesn't rely on language priors at all.
     """
 
-    # Confidence threshold: OWL-ViT detections below this score are ignored
+    # Confidence threshold: detections below this score are ignored
     DETECTION_THRESHOLD = 0.15
 
-    def __init__(self, model_name: str = "google/owlvit-base-patch32"):
-        from transformers import OwlViTProcessor, OwlViTForObjectDetection
-
+    def __init__(self, model_name: str = "google/owlv2-base-patch16-ensemble"):
+        """
+        Args:
+            model_name: HuggingFace model ID. Options:
+                - "google/owlv2-base-patch16-ensemble" (recommended, better accuracy)
+                - "google/owlvit-base-patch32" (legacy, faster but less accurate)
+        """
         print(f"[SpatialVerifier] Loading {model_name} ...")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._model_name = model_name
 
-        self.processor = OwlViTProcessor.from_pretrained(model_name)
-        self.model = OwlViTForObjectDetection.from_pretrained(model_name).to(self.device)
+        if "owlv2" in model_name:
+            from transformers import Owlv2Processor, Owlv2ForObjectDetection
+            self.processor = Owlv2Processor.from_pretrained(model_name)
+            self.model = Owlv2ForObjectDetection.from_pretrained(model_name).to(self.device)
+        else:
+            from transformers import OwlViTProcessor, OwlViTForObjectDetection
+            self.processor = OwlViTProcessor.from_pretrained(model_name)
+            self.model = OwlViTForObjectDetection.from_pretrained(model_name).to(self.device)
+
         self.model.eval()
         print("[SpatialVerifier] Ready.")
 
     def detect(self, image: Image.Image, queries: list[str]) -> dict[str, list[BoundingBox]]:
         """
         Detect objects in image matching the text queries.
+        Works with both OWL-ViT v1 and OWLv2.
 
         Args:
             image:   PIL Image
@@ -249,20 +287,34 @@ class SpatialVerifier:
             dict mapping each query string to a list of BoundingBox detections
             (sorted by score, highest first).
         """
-        texts = [queries]   # OWL-ViT expects [[query1, query2]] for single image
+        texts = [queries]   # OWL-ViT/v2 expects [[query1, query2]] for single image
 
         inputs = self.processor(text=texts, images=image, return_tensors="pt").to(self.device)
         with torch.no_grad():
             outputs = self.model(**inputs)
 
-        # Post-process to get boxes in [0,1] normalized coords
+        # Post-process to get boxes in pixel coords
         target_sizes = torch.tensor([image.size[::-1]])  # (H, W)
-        # Newer transformers moved post_process off the processor onto image_processor
-        _post_process = (
-            self.processor.post_process_object_detection
-            if hasattr(self.processor, "post_process_object_detection")
-            else self.processor.image_processor.post_process_object_detection
-        )
+
+        # Try multiple API locations — transformers versions differ
+        _post_process = None
+        for attr_name in [
+            "post_process_object_detection",           # processor-level
+            "image_processor.post_process_object_detection",  # newer API
+        ]:
+            obj = self.processor
+            for part in attr_name.split("."):
+                obj = getattr(obj, part, None)
+                if obj is None:
+                    break
+            if obj is not None:
+                _post_process = obj
+                break
+
+        if _post_process is None:
+            print("[SpatialVerifier] WARNING: Cannot find post_process method — returning empty.")
+            return {q: [] for q in queries}
+
         results = _post_process(
             outputs=outputs,
             target_sizes=target_sizes,
@@ -356,8 +408,10 @@ class SpatialVerifier:
             size_ratio = subj_box.area / (obj_box.area + 1e-6)
             return iou > 0.1 and size_ratio > 0.8
 
-        # Unknown spatial relation — default to True (don't flag as hallucination)
-        return True
+        # Unknown spatial relation — return low confidence to trigger VQA fallback
+        # instead of silently approving. This covers "across", "along", "through",
+        # "around", etc. that have no geometric rule.
+        return None   # sentinel: caller checks for None → VQA fallback
 
     def verify(self, image: Image.Image, triple: Triple) -> tuple[bool, float]:
         """
@@ -384,10 +438,14 @@ class SpatialVerifier:
         subj_box = subj_boxes[0]   # top-scoring detection for subject
         obj_box  = obj_boxes[0]    # top-scoring detection for object
 
-        is_supported = self.check_spatial_relation(subj_box, triple.relation, obj_box)
-        confidence = min(subj_box.score, obj_box.score)   # limited by weakest detection
+        result = self.check_spatial_relation(subj_box, triple.relation, obj_box)
 
-        return is_supported, confidence
+        # None = unknown spatial relation with no geometric rule → VQA fallback
+        if result is None:
+            return True, 0.3
+
+        confidence = min(subj_box.score, obj_box.score)   # limited by weakest detection
+        return result, confidence
 
 
 # ---------------------------------------------------------------------------
@@ -404,22 +462,28 @@ class LLaVAVerifier:
 
     Uses the same token-probability approach as VQAVerifier: reads yes/no logit
     mass at the first generated token rather than greedy-decoded text.
+
+    Multi-question voting (inspired by VisMin, NeurIPS 2024): for each triple,
+    we generate 2-3 paraphrased questions and aggregate yes_ratios. This reduces
+    noise from single-question VQA and shrinks the uncertain zone.
     """
 
     CONVERSATION_TEMPLATE = "USER: <image>\n{question} Answer with yes or no only. ASSISTANT:"
 
-    def __init__(self, model=None, processor=None):
+    def __init__(self, model=None, processor=None, num_paraphrases: int = 3):
         """
         Args:
-            model:     Pre-loaded LlavaForConditionalGeneration (injected from notebook).
-            processor: Pre-loaded LlavaProcessor (injected from notebook).
-        If both are None, the verifier will load its own copy (slower, uses more VRAM).
+            model:          Pre-loaded LlavaForConditionalGeneration (injected from notebook).
+            processor:      Pre-loaded LlavaProcessor (injected from notebook).
+            num_paraphrases: Number of question variants to ask per triple (1 = original behavior).
+        If both model and processor are None, the verifier will load its own copy.
         """
+        self.num_paraphrases = num_paraphrases
         if model is not None and processor is not None:
             self.model     = model
             self.processor = processor
             self.device    = next(model.parameters()).device
-            print("[LLaVAVerifier] Using injected LLaVA model.")
+            print(f"[LLaVAVerifier] Using injected LLaVA model. Paraphrases: {num_paraphrases}")
         else:
             self._load_model()
 
@@ -436,9 +500,9 @@ class LLaVAVerifier:
         print("[LLaVAVerifier] Ready.")
 
     def _build_question(self, triple: Triple) -> str:
-        """Reuse VQAVerifier's question builder (same question, different model)."""
-        s = _clean_query(triple.subject)
-        o = _clean_query(triple.obj)
+        """Build primary yes/no question. Uses light cleaning to keep adjectives."""
+        s = _clean_query_for_vqa(triple.subject)
+        o = _clean_query_for_vqa(triple.obj)
         r = triple.relation
         if triple.relation_type == "ATTRIBUTE":
             return f"Is the {s} {o}?"
@@ -447,13 +511,55 @@ class LLaVAVerifier:
         verb_ing = _to_present_participle(r)
         return f"Is the {s} {verb_ing} the {o}?"
 
-    def verify(self, image: Image.Image, triple: Triple) -> tuple[bool, float]:
+    def _build_paraphrased_questions(self, triple: Triple) -> list[str]:
         """
-        Verify a triple using LLaVA — fully independent from BLIP-2.
-        Returns (is_supported, confidence) using token-level yes/no probabilities.
+        Generate 2-3 paraphrased questions for multi-question voting.
+        Inspired by VisMin (NeurIPS 2024) multi-view evaluation approach.
+
+        Returns a list of question strings (always includes the primary question).
         """
-        question = self._build_question(triple)
-        prompt   = self.CONVERSATION_TEMPLATE.format(question=question)
+        s = _clean_query_for_vqa(triple.subject)
+        o = _clean_query_for_vqa(triple.obj)
+        r = triple.relation
+        questions = [self._build_question(triple)]   # always include primary
+
+        if self.num_paraphrases <= 1:
+            return questions
+
+        if triple.relation_type == "ACTION":
+            verb_ing = _to_present_participle(r)
+            # Passive voice variant
+            questions.append(f"Is the {o} being {r}ed by the {s}?")
+            # Descriptive variant
+            questions.append(f"Can you see the {s} {verb_ing} the {o} in this image?")
+
+        elif triple.relation_type == "SPATIAL":
+            # Reversed perspective
+            _reverse_map = {
+                "on": "under", "under": "on", "above": "below", "below": "above",
+                "left of": "right of", "right of": "left of",
+                "in front of": "behind", "behind": "in front of",
+            }
+            rev = _reverse_map.get(r.lower())
+            if rev:
+                questions.append(f"Is the {o} {rev} the {s}?")
+            # Descriptive variant
+            questions.append(f"In this image, is the {s} positioned {r} the {o}?")
+
+        elif triple.relation_type == "ATTRIBUTE":
+            # Rephrase with "does...look"
+            questions.append(f"Does the {s} look {o}?")
+            questions.append(f"Would you describe the {s} as {o}?")
+
+        else:
+            # Generic rephrase for OTHER
+            questions.append(f"Does this image show the {s} {r} the {o}?")
+
+        return questions[:self.num_paraphrases]
+
+    def _get_yes_ratio(self, image: Image.Image, question: str) -> float:
+        """Run one VQA question and return the yes_ratio (0.0 to 1.0)."""
+        prompt = self.CONVERSATION_TEMPLATE.format(question=question)
 
         inputs = self.processor(
             text=prompt, images=image, return_tensors="pt"
@@ -473,15 +579,42 @@ class LLaVAVerifier:
         yes_id = self.processor.tokenizer.encode("yes", add_special_tokens=False)[0]
         no_id  = self.processor.tokenizer.encode("no",  add_special_tokens=False)[0]
 
-        yes_prob  = probs[yes_id].item()
-        no_prob   = probs[no_id].item()
-        total     = yes_prob + no_prob + 1e-9
-        yes_ratio = yes_prob / total
-        is_yes    = yes_ratio >= 0.5
-        confidence = max(yes_ratio, 1.0 - yes_ratio)
+        yes_prob = probs[yes_id].item()
+        no_prob  = probs[no_id].item()
+        total    = yes_prob + no_prob + 1e-9
+        return yes_prob / total
 
-        # Ambiguous zone → leave as uncertain
-        if 0.50 <= yes_ratio < 0.65:
+    def verify(self, image: Image.Image, triple: Triple) -> tuple[bool, float]:
+        """
+        Verify a triple using LLaVA with multi-question voting.
+
+        When num_paraphrases > 1, asks multiple paraphrased questions and
+        averages the yes_ratios for a more robust decision. This reduces
+        the uncertain zone and catches more hallucinations.
+
+        Returns (is_supported, confidence).
+        """
+        questions = self._build_paraphrased_questions(triple)
+
+        # Collect yes_ratios from all paraphrases
+        yes_ratios = []
+        for q in questions:
+            try:
+                yr = self._get_yes_ratio(image, q)
+                yes_ratios.append(yr)
+            except Exception:
+                continue   # skip failed paraphrases, use the rest
+
+        if not yes_ratios:
+            return True, 0.3   # all failed → uncertain
+
+        # Aggregate: average of yes_ratios
+        avg_yes_ratio = sum(yes_ratios) / len(yes_ratios)
+        is_yes = avg_yes_ratio >= 0.5
+        confidence = max(avg_yes_ratio, 1.0 - avg_yes_ratio)
+
+        # Ambiguous zone → uncertain (narrower with multi-question voting)
+        if 0.50 <= avg_yes_ratio < 0.65:
             confidence = 0.3
 
         return is_yes, confidence
@@ -511,11 +644,12 @@ class RelationVerifier:
 
     CONFIDENCE_THRESHOLD = 0.45
 
-    def __init__(self, llava_model=None, llava_processor=None):
+    def __init__(self, llava_model=None, llava_processor=None, num_paraphrases: int = 3):
         """
         Args:
-            llava_model:     Injected LLaVA model for cross-model verification.
-            llava_processor: Injected LLaVA processor.
+            llava_model:      Injected LLaVA model for cross-model verification.
+            llava_processor:  Injected LLaVA processor.
+            num_paraphrases:  Number of paraphrased questions per triple (1 = no voting).
         If LLaVA is not provided, falls back to BLIP-2 VQA (with yes-bias caveat).
         """
         self.spatial      = SpatialVerifier()
@@ -523,7 +657,11 @@ class RelationVerifier:
         self.skip_vqa     = False
 
         if llava_model is not None:
-            self.llava = LLaVAVerifier(model=llava_model, processor=llava_processor)
+            self.llava = LLaVAVerifier(
+                model=llava_model,
+                processor=llava_processor,
+                num_paraphrases=num_paraphrases,
+            )
             self.vqa   = None   # BLIP-2 VQA not needed when LLaVA is available
             print("[RelationVerifier] Using LLaVA for action/attribute verification.")
         else:

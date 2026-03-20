@@ -28,8 +28,13 @@ SPATIAL_KEYWORDS = {
     "on", "in", "above", "below", "under", "over", "beside",
     "next to", "near", "behind", "in front of", "left of",
     "right of", "between", "inside", "outside", "on top of",
-    "at", "around", "across", "along", "within", "with",
+    "at", "around", "across", "along", "within",
 }
+
+# "with" is intentionally excluded from SPATIAL_KEYWORDS.
+# "playing with", "covered with" etc. are instrumental/action relations,
+# not spatial — they should route to LLaVA VQA, not OWL-ViT geometry.
+INSTRUMENTAL_KEYWORDS = {"with", "using", "via"}
 
 ACTION_KEYWORDS = {
     "hold", "carry", "eat", "drink", "ride", "wear", "walk",
@@ -81,7 +86,11 @@ class Triple:
 # ---------------------------------------------------------------------------
 
 def classify_relation(relation: str) -> str:
-    """Classify a relation string as SPATIAL, ACTION, ATTRIBUTE, or OTHER."""
+    """Classify a relation string as SPATIAL, ACTION, ATTRIBUTE, or OTHER.
+
+    "with" and other instrumental prepositions route to OTHER (→ VQA),
+    not SPATIAL, because they describe manner/instrument, not geometry.
+    """
     rel = relation.lower().strip()
     if rel in SPATIAL_KEYWORDS:
         return "SPATIAL"
@@ -89,6 +98,9 @@ def classify_relation(relation: str) -> str:
         return "ACTION"
     if rel in ("is", "are", "was", "were", "be"):
         return "ATTRIBUTE"
+    # Instrumental relations go to VQA (not spatial geometry)
+    if rel in INSTRUMENTAL_KEYWORDS:
+        return "OTHER"
     return "OTHER"
 
 
