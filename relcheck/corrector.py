@@ -60,12 +60,14 @@ CORRECTION_USER_TEMPLATE_WITH_EVIDENCE = """Original caption: "{caption}"
 The relation '{relation}' between '{subject}' and '{object}' has been verified to \
 be incorrect — it is not supported by the image.
 
-Visual evidence from the image: {evidence}
+An independent visual model described this relationship as: "{evidence}"
 
-Use the visual evidence as a hint to choose the correct replacement relation. \
-Do NOT insert the evidence text literally — instead, pick the right relation word \
-(verb, preposition, or adjective) that fits grammatically into the original sentence. \
-Change ONLY the incorrect relation. Keep everything else exactly the same.
+Instructions:
+1. Use the visual description above ONLY as context to understand what the image actually shows.
+2. Rewrite the caption by changing ONLY the incorrect relation word/phrase.
+3. The replacement must fit grammatically into the original sentence structure.
+4. NEVER copy words or phrases from the visual description into the caption.
+5. Keep all other words exactly the same.
 
 Corrected caption:"""
 
@@ -74,10 +76,12 @@ BATCH_CORRECTION_USER_TEMPLATE = """Original caption: "{caption}"
 The following relations have been verified to be incorrect — they are not supported by the image:
 {hallucination_list}
 
-Rewrite the caption with minimal fixes for ALL of the above incorrect relations. \
-For each, use any provided visual evidence as a hint to choose the correct replacement — \
-do NOT insert evidence text literally. Replace only the incorrect relation words. \
-Keep everything else exactly the same. Fix them all in one pass.
+Instructions:
+1. For each incorrect relation, change ONLY the relation word/phrase to one that is correct.
+2. If visual evidence is provided, use it ONLY as context — NEVER copy evidence text into the caption.
+3. Each replacement must fit grammatically into the original sentence.
+4. Keep everything else (objects, descriptions, structure) exactly the same.
+5. Fix all incorrect relations in one pass.
 
 Corrected caption:"""
 
@@ -118,8 +122,13 @@ class MinimalCorrector:
 
     def _call_llm(self, caption: str, triple: Triple) -> str:
         """Call Llama-3.3-70B (Together.ai) to produce a corrected caption.
-        Uses VQA evidence when available for guided correction."""
-        if triple.vqa_evidence:
+        Uses VQA evidence when available (and long enough) for guided correction."""
+        # Only use evidence if it's a real sentence (≥5 words), not a fragment
+        has_useful_evidence = (
+            triple.vqa_evidence
+            and len(triple.vqa_evidence.split()) >= 5
+        )
+        if has_useful_evidence:
             user_msg = CORRECTION_USER_TEMPLATE_WITH_EVIDENCE.format(
                 caption=caption,
                 relation=triple.relation,
@@ -216,12 +225,13 @@ class MinimalCorrector:
 
     def _call_llm_batch(self, caption: str, hallucinated_triples: list[Triple]) -> str:
         """Call Llama-3.3-70B to correct ALL hallucinated triples in one pass.
-        Includes VQA evidence when available."""
+        Includes VQA evidence when available and long enough."""
         lines = []
         for i, t in enumerate(hallucinated_triples, 1):
             line = f"  {i}. '{t.relation}' between '{t.subject}' and '{t.obj}'"
-            if t.vqa_evidence:
-                line += f" (image actually shows: {t.vqa_evidence})"
+            # Only include evidence if it's a real sentence (≥5 words)
+            if t.vqa_evidence and len(t.vqa_evidence.split()) >= 5:
+                line += f" (visual model describes: {t.vqa_evidence})"
             lines.append(line)
         hallucination_list = "\n".join(lines)
 

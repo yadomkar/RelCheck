@@ -456,27 +456,42 @@ class SpatialVerifier:
 
 class LLaVAVerifier:
     """
-    Uses LLaVA-1.5-7B to verify action/attribute triples via a
-    Describe-and-Compare approach — fully independent from BLIP-2.
+    Uses LLaVA-1.5-7B to verify action/attribute triples via dual-signal
+    verification — fully independent from BLIP-2.
 
-    Instead of binary yes/no VQA (which suffers from yes-bias and requires
-    arbitrary thresholds), we:
-      1. Ask LLaVA to DESCRIBE the relationship in the image (open-ended)
-      2. Use Llama-3.3-70B (text NLI) to compare the description against
-         the caption's claim
-      3. Consistent → supported, Inconsistent → hallucinated
+    Dual verification approach:
+      1. SIGNAL 1 (VQA): Binary yes/no question → yes_ratio
+         Fast and usually correct for clearly-supported relations.
+      2. SIGNAL 2 (Describe-and-Compare): LLaVA describes the relationship,
+         Llama-3.3-70B judges semantic consistency with the caption's claim.
+         Provides evidence for correction.
 
-    Inspired by TIFA (ICCV 2023) decomposed QA, VQAScore (ICLR 2025)
-    insights on binary VQA limitations, and DSG (ICLR 2024) structured
-    scene graph verification.
+    Decision logic (conservative — reduces false positives):
+      - VQA high confidence YES (≥0.65) → supported (skip NLI)
+      - VQA low confidence NO (<0.40) → run NLI to CONFIRM hallucination
+        - NLI says inconsistent → hallucinated (with evidence)
+        - NLI says consistent  → uncertain (NLI overrides VQA)
+      - VQA uncertain [0.40, 0.65) → run NLI as tiebreaker
 
-    Key advantages over binary VQA:
-      - No yes-bias (LLaVA describes, doesn't judge)
-      - No threshold tuning (Llama makes a semantic comparison)
-      - Evidence is free (LLaVA's description IS the correction evidence)
+    Key insight: Binary VQA has yes-bias, so when it says "no" something is
+    likely wrong. But we still double-check with NLI to avoid false positives
+    from VQA noise. Evidence comes free from the describe step.
+
+    Inspired by TIFA (ICCV 2023), VQAScore (ICLR 2025), DSG (ICLR 2024).
     """
 
-    DESCRIBE_TEMPLATE = "USER: <image>\n{question} Describe in one short sentence. ASSISTANT:"
+    # VQA template (binary yes/no)
+    VQA_TEMPLATE = "USER: <image>\n{question} Answer with yes or no only. ASSISTANT:"
+
+    # Describe template (open-ended — forces complete sentence)
+    DESCRIBE_TEMPLATE = (
+        "USER: <image>\n{question}\n"
+        "Describe what you see in one complete sentence starting with 'The'. ASSISTANT:"
+    )
+
+    # Thresholds for VQA signal
+    VQA_SUPPORTED_THRESHOLD = 0.65     # above → supported without NLI
+    VQA_HALLUCINATED_THRESHOLD = 0.40  # below → likely hallucinated, confirm with NLI
 
     def __init__(self, model=None, processor=None, together_client=None,
                  num_paraphrases: int = 3):
@@ -485,7 +500,7 @@ class LLaVAVerifier:
             model:            Pre-loaded LlavaForConditionalGeneration.
             processor:        Pre-loaded LlavaProcessor.
             together_client:  together.Together client for Llama NLI calls.
-            num_paraphrases:  Kept for backward compat (unused in describe-and-compare).
+            num_paraphrases:  Number of VQA paraphrases for multi-question voting.
         """
         self.num_paraphrases = num_paraphrases
         self.together_client = together_client
@@ -495,7 +510,7 @@ class LLaVAVerifier:
             self.model     = model
             self.processor = processor
             self.device    = next(model.parameters()).device
-            print(f"[LLaVAVerifier] Using Describe-and-Compare verification.")
+            print(f"[LLaVAVerifier] Using dual-signal verification (VQA + Describe-and-Compare).")
         else:
             self._load_model()
 
@@ -571,7 +586,7 @@ class LLaVAVerifier:
 
     def _get_yes_ratio(self, image: Image.Image, question: str) -> float:
         """Run one VQA question and return the yes_ratio (0.0 to 1.0)."""
-        prompt = self.CONVERSATION_TEMPLATE.format(question=question)
+        prompt = self.VQA_TEMPLATE.format(question=question)
 
         inputs = self.processor(
             text=prompt, images=image, return_tensors="pt"
@@ -603,19 +618,20 @@ class LLaVAVerifier:
     def _describe_relation(self, image: Image.Image, triple: Triple) -> str:
         """
         Ask LLaVA an open-ended question about the relationship between
-        subject and object. Returns a short descriptive sentence.
+        subject and object. Returns a descriptive sentence.
 
         This is the 'Describe' step of Describe-and-Compare.
+        Forces complete sentence output (not fragments).
         """
         s = _clean_query_for_vqa(triple.subject)
         o = _clean_query_for_vqa(triple.obj)
 
         if triple.relation_type == "SPATIAL":
-            question = f"Where is the {s} positioned relative to the {o} in this image?"
+            question = f"Where is the {s} relative to the {o}?"
         elif triple.relation_type == "ATTRIBUTE":
-            question = f"What does the {s} look like in this image?"
+            question = f"How would you describe the {s}?"
         else:
-            question = f"What is the {s} doing in relation to the {o} in this image?"
+            question = f"What is the {s} doing with the {o}?"
 
         prompt = self.DESCRIBE_TEMPLATE.format(question=question)
 
@@ -626,7 +642,7 @@ class LLaVAVerifier:
         with torch.no_grad():
             output_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=40,
+                max_new_tokens=60,
                 do_sample=False,
             )
 
@@ -634,6 +650,33 @@ class LLaVAVerifier:
         answer = self.processor.tokenizer.decode(
             output_ids[0][input_len:], skip_special_tokens=True
         ).strip()
+
+        # If answer is too short (< 4 words), it's a fragment — unreliable
+        if len(answer.split()) < 4:
+            print(f"    [Describe] Short answer ({answer!r}), retrying with explicit prompt...")
+            retry_prompt = (
+                f"USER: <image>\nLook at the image. "
+                f"Describe the relationship between the {s} and the {o}. "
+                f"Write a full sentence. ASSISTANT: The"
+            )
+            inputs2 = self.processor(
+                text=retry_prompt, images=image, return_tensors="pt"
+            ).to(self.device)
+            with torch.no_grad():
+                output_ids2 = self.model.generate(
+                    **inputs2, max_new_tokens=60, do_sample=False,
+                )
+            input_len2 = inputs2["input_ids"].shape[1]
+            retry_answer = self.processor.tokenizer.decode(
+                output_ids2[0][input_len2:], skip_special_tokens=True
+            ).strip()
+            # Prepend "The" since we seeded the generation with it
+            if retry_answer and not retry_answer.lower().startswith("the"):
+                retry_answer = "The " + retry_answer
+            if len(retry_answer.split()) >= 4:
+                answer = retry_answer
+                print(f"    [Describe] Retry got: {answer!r}")
+
         return answer
 
     # ------------------------------------------------------------------
@@ -727,30 +770,72 @@ class LLaVAVerifier:
 
     def verify(self, image: Image.Image, triple: Triple) -> tuple[bool, float]:
         """
-        Verify a triple using Describe-and-Compare:
-          1. Ask LLaVA to describe the relationship (open-ended)
-          2. Use Llama NLI to check semantic consistency with the caption
-          3. Store the description as vqa_evidence for the corrector
+        Dual-signal verification:
+          Signal 1 (VQA):  Binary yes/no → yes_ratio
+          Signal 2 (NLI):  Describe-and-Compare → semantic consistency
+
+        Decision logic:
+          - VQA ≥ 0.65 → supported (high confidence, skip NLI)
+          - VQA < 0.40 → likely hallucinated → run NLI to confirm
+              NLI inconsistent → hallucinated (both agree)
+              NLI consistent   → uncertain (NLI overrides noisy VQA)
+          - VQA ∈ [0.40, 0.65) → uncertain zone → run NLI as tiebreaker
 
         Returns (is_supported, confidence).
         """
-        # Step 1: Describe
+        # ── Signal 1: Binary VQA (multi-question voting) ──────────────
+        questions = self._build_paraphrased_questions(triple)
+        yes_ratios = []
+        for q in questions:
+            try:
+                yr = self._get_yes_ratio(image, q)
+                yes_ratios.append(yr)
+            except Exception as e:
+                print(f"    [VQA] Error: {e}")
+        avg_yes_ratio = sum(yes_ratios) / len(yes_ratios) if yes_ratios else 0.5
+        print(f"    [VQA] ({triple.subject}, {triple.relation}, {triple.obj}): "
+              f"yes_ratio={avg_yes_ratio:.3f} ({len(questions)} questions)")
+
+        # High confidence supported → no NLI needed
+        if avg_yes_ratio >= self.VQA_SUPPORTED_THRESHOLD:
+            return True, 0.80
+
+        # ── Signal 2: Describe-and-Compare (NLI confirmation) ─────────
         try:
             description = self._describe_relation(image, triple)
         except Exception as e:
-            print(f"  [LLaVA] Description failed: {e}")
-            return True, 0.3   # fail open → uncertain
-
-        if not description:
+            print(f"    [Describe] Failed: {e}")
+            # VQA said uncertain or hallucinated, but NLI failed → uncertain
             return True, 0.3
+
+        if not description or len(description.split()) < 3:
+            # Can't get a useful description → rely on VQA alone
+            if avg_yes_ratio < self.VQA_HALLUCINATED_THRESHOLD:
+                return False, 0.55  # weak hallucination signal
+            return True, 0.3       # uncertain
 
         # Store description as evidence (used by corrector if hallucinated)
         triple.vqa_evidence = description
 
-        # Step 2: Compare
-        is_consistent, confidence = self._compare_nli(triple, description)
+        is_consistent, nli_conf = self._compare_nli(triple, description)
+        print(f"    [NLI] consistent={is_consistent}, conf={nli_conf:.2f}, "
+              f"evidence={description!r}")
 
-        return is_consistent, confidence
+        # ── Decision logic ────────────────────────────────────────────
+        if avg_yes_ratio < self.VQA_HALLUCINATED_THRESHOLD:
+            # VQA says hallucinated — NLI confirms or overrides
+            if not is_consistent:
+                return False, 0.85   # BOTH agree → high confidence hallucination
+            else:
+                return True, 0.35    # NLI disagrees → uncertain (fail open)
+        else:
+            # VQA uncertain [0.40, 0.65) — NLI is the tiebreaker
+            if not is_consistent and nli_conf >= 0.7:
+                return False, 0.65   # NLI confident → hallucinated
+            elif is_consistent:
+                return True, 0.60    # NLI says OK → supported
+            else:
+                return True, 0.35    # both uncertain → fail open
 
     # Keep gather_evidence for backward compatibility — now just returns
     # the already-stored vqa_evidence from the verify() step.
