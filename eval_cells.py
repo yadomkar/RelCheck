@@ -215,13 +215,13 @@ def print_metrics(metrics, label):
             print(f"  {k:14s}: {v}")
 
 
-b1_metrics = compute_rpope_metrics(b1_preds)
-b2_metrics = compute_rpope_metrics(b2_preds)
-rc_metrics = compute_rpope_metrics(rc_preds)
+b1_metrics_llm = compute_rpope_metrics(b1_preds)
+b2_metrics_llm = compute_rpope_metrics(b2_preds)
+rc_metrics_llm = compute_rpope_metrics(rc_preds)
 
-print_metrics(b1_metrics, "B1 (No Correction)")
-print_metrics(b2_metrics, "B2 (Self-Refine)")
-print_metrics(rc_metrics, "RelCheck")
+print_metrics(b1_metrics_llm, "B1 (No Correction)")
+print_metrics(b2_metrics_llm, "B2 (Self-Refine)")
+print_metrics(rc_metrics_llm, "RelCheck")
 
 
 # --- Comparison table ---
@@ -232,9 +232,9 @@ print(f"{'='*70}")
 print(f"  {'Metric':<14} {'B1 (No Corr)':>14} {'B2 (Self-Ref)':>14} {'RelCheck':>14}")
 print(f"  {'-'*56}")
 for m in ['accuracy', 'precision', 'recall', 'f1', 'yes_ratio']:
-    v1 = b1_metrics[m]
-    v2 = b2_metrics[m]
-    v3 = rc_metrics[m]
+    v1 = b1_metrics_llm[m]
+    v2 = b2_metrics_llm[m]
+    v3 = rc_metrics_llm[m]
     # Bold the best
     best = max(v1, v2, v3) if m != 'yes_ratio' else None
     print(f"  {m:<14} {v1:>14.4f} {v2:>14.4f} {v3:>14.4f}", end="")
@@ -245,8 +245,8 @@ for m in ['accuracy', 'precision', 'recall', 'f1', 'yes_ratio']:
 print(f"{'='*70}")
 
 # --- Improvement deltas ---
-print(f"\n  RelCheck vs B1:  accuracy Δ = {rc_metrics['accuracy'] - b1_metrics['accuracy']:+.4f}")
-print(f"  RelCheck vs B2:  accuracy Δ = {rc_metrics['accuracy'] - b2_metrics['accuracy']:+.4f}")
+print(f"\n  RelCheck vs B1:  accuracy Δ = {rc_metrics_llm['accuracy'] - b1_metrics_llm['accuracy']:+.4f}")
+print(f"  RelCheck vs B2:  accuracy Δ = {rc_metrics_llm['accuracy'] - b2_metrics_llm['accuracy']:+.4f}")
 
 
 # --- Save all results ---
@@ -266,11 +266,11 @@ df_llm_rc.to_csv(f"{EVAL_DIR}/r_pope_llm_judge_rc.csv", index=False)
 
 # Summary JSON
 llm_judge_summary = {
-    "B1_no_correction": b1_metrics,
-    "B2_self_refine":   b2_metrics,
-    "RelCheck":         rc_metrics,
-    "delta_vs_b1":      rc_metrics['accuracy'] - b1_metrics['accuracy'],
-    "delta_vs_b2":      rc_metrics['accuracy'] - b2_metrics['accuracy'],
+    "B1_no_correction": b1_metrics_llm,
+    "B2_self_refine":   b2_metrics_llm,
+    "RelCheck":         rc_metrics_llm,
+    "delta_vs_b1":      rc_metrics_llm['accuracy'] - b1_metrics_llm['accuracy'],
+    "delta_vs_b2":      rc_metrics_llm['accuracy'] - b2_metrics_llm['accuracy'],
 }
 with open(f"{EVAL_DIR}/r_pope_llm_judge_summary.json", "w") as f:
     json.dump(llm_judge_summary, f, indent=2)
@@ -343,7 +343,7 @@ if CLIP_AVAILABLE:
     df_rc = pd.read_csv(f"{EVAL_DIR}/relcheck_results.csv")
 
     # We need image paths — reconstruct from image_id
-    IMAGE_DIR = "/content/RelCheck_Data/images"  # Google Drive cached images
+    IMAGE_DIR = DRIVE_IMAGES_DIR  # Google Drive cached images
     # Fallback: try to load from eval_dataset if available
     try:
         with open(f"{EVAL_DIR}/rbench_subset.json") as f:
