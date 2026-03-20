@@ -37,11 +37,13 @@ CORRECTION_SYSTEM_PROMPT = """You are a precise caption editor. Your job is to f
 factual errors in image captions — specifically incorrect relationship descriptions.
 
 Rules:
-1. Change ONLY the specific incorrect relation(s). Do not rewrite the whole caption.
+1. Change ONLY the specific incorrect relation word or phrase. Do not rewrite the whole caption.
 2. Keep all other words, objects, and descriptions exactly the same.
-3. If you are not sure what the correct relation is, use the most neutral option \
+3. Replace the incorrect relation with a correct one that fits grammatically into the sentence.
+4. If you are not sure what the correct relation is, use the most neutral option \
    (e.g. "near" instead of a specific spatial relation).
-4. Output ONLY the corrected caption — no explanation, no quotes, nothing else."""
+5. The corrected caption must be a grammatically correct English sentence.
+6. Output ONLY the corrected caption — no explanation, no quotes, nothing else."""
 
 CORRECTION_USER_TEMPLATE = """Original caption: "{caption}"
 
@@ -57,11 +59,13 @@ CORRECTION_USER_TEMPLATE_WITH_EVIDENCE = """Original caption: "{caption}"
 
 The relation '{relation}' between '{subject}' and '{object}' has been verified to \
 be incorrect — it is not supported by the image.
-According to the image, the actual relationship is: {evidence}
 
-Rewrite the caption with a minimal fix for this one relation only, \
-using the evidence above to choose the correct replacement. \
-Keep everything else exactly the same.
+Visual evidence from the image: {evidence}
+
+Use the visual evidence as a hint to choose the correct replacement relation. \
+Do NOT insert the evidence text literally — instead, pick the right relation word \
+(verb, preposition, or adjective) that fits grammatically into the original sentence. \
+Change ONLY the incorrect relation. Keep everything else exactly the same.
 
 Corrected caption:"""
 
@@ -71,6 +75,8 @@ The following relations have been verified to be incorrect — they are not supp
 {hallucination_list}
 
 Rewrite the caption with minimal fixes for ALL of the above incorrect relations. \
+For each, use any provided visual evidence as a hint to choose the correct replacement — \
+do NOT insert evidence text literally. Replace only the incorrect relation words. \
 Keep everything else exactly the same. Fix them all in one pass.
 
 Corrected caption:"""

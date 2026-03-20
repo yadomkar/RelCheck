@@ -167,11 +167,11 @@ class VQAVerifier:
         # We require yes_ratio > 0.65 to call "supported" — this combats yes-bias.
         confidence = max(yes_ratio, 1.0 - yes_ratio)
 
-        # Override: if yes_ratio is in the ambiguous zone (0.40–0.65), treat as uncertain
+        # Override: if yes_ratio is in the ambiguous zone (0.35–0.65), treat as uncertain
         # by returning low confidence so the caller leaves hallucinated=None.
-        # Tightened from [0.50, 0.65): only flag hallucination below 0.40 to reduce
-        # false positives (over-correction).
-        if 0.40 <= yes_ratio < 0.65:
+        # Tightened from [0.50, 0.65): only flag hallucination below 0.35 to reduce
+        # false positives (over-correction from borderline cases).
+        if 0.35 <= yes_ratio < 0.65:
             confidence = 0.3    # forces hallucinated=None (uncertain)
 
         return is_yes, confidence
@@ -615,37 +615,38 @@ class LLaVAVerifier:
         is_yes = avg_yes_ratio >= 0.5
         confidence = max(avg_yes_ratio, 1.0 - avg_yes_ratio)
 
-        # Ambiguous zone → uncertain (tightened: only flag hallucination below 0.40)
+        # Ambiguous zone → uncertain (tightened: only flag hallucination below 0.35)
         # This reduces false positives — corrections only happen when VQA is
-        # fairly confident the relation is wrong.
-        if 0.40 <= avg_yes_ratio < 0.65:
+        # quite confident the relation is wrong. With 3 paraphrased questions,
+        # passive-voice variants can drag scores down for correct relations.
+        if 0.35 <= avg_yes_ratio < 0.65:
             confidence = 0.3
 
         return is_yes, confidence
 
+    EVIDENCE_TEMPLATE = "USER: <image>\n{question} Describe in one short sentence. ASSISTANT:"
+
     def gather_evidence(self, image: Image.Image, triple: Triple) -> str:
         """
         Ask LLaVA an open-ended descriptive question about the relationship
-        between subject and object. Returns a short text answer that can be
-        fed to the corrector as evidence for guided correction.
+        between subject and object. Returns a short descriptive sentence that
+        can be fed to the corrector as evidence for guided correction.
 
-        This replaces "blind correction" where the LLM had to guess the right
-        relation without any image-grounded evidence.
+        Uses a separate prompt template (not the yes/no template) to get
+        descriptive answers instead of single-word responses.
         """
         s = _clean_query_for_vqa(triple.subject)
         o = _clean_query_for_vqa(triple.obj)
 
         if triple.relation_type == "SPATIAL":
-            question = f"Where is the {s} relative to the {o}? Answer in a few words."
+            question = f"Where is the {s} positioned relative to the {o} in this image?"
         elif triple.relation_type == "ATTRIBUTE":
-            question = f"How would you describe the {s}? Answer in a few words."
+            question = f"What does the {s} look like in this image?"
         else:
             # ACTION / OTHER / INSTRUMENTAL
-            question = f"What is the {s} doing with or near the {o}? Answer in a few words."
+            question = f"What is the {s} doing in relation to the {o} in this image?"
 
-        prompt = self.CONVERSATION_TEMPLATE.replace(
-            "Answer with yes or no only.", ""
-        ).format(question=question)
+        prompt = self.EVIDENCE_TEMPLATE.format(question=question)
 
         inputs = self.processor(
             text=prompt, images=image, return_tensors="pt"
@@ -654,8 +655,7 @@ class LLaVAVerifier:
         with torch.no_grad():
             output_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=30,
-                temperature=0.2,
+                max_new_tokens=40,
                 do_sample=False,
             )
 
