@@ -843,3 +843,224 @@ with open(f"{EVAL_DIR}/pivot_test_b3_vs_relcheck.json", "w") as f:
 import shutil as _shutil; _shutil.copy2(f"{EVAL_DIR}/pivot_test_b3_vs_relcheck.json", DRIVE_EVAL_DIR); print("💾 Synced pivot_test_b3_vs_relcheck.json → Drive")
 
 print(f"\n✅ Pivot test saved to {EVAL_DIR}/pivot_test_b3_vs_relcheck.json")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CELL F — Mention-Filtered LLM-Judge Evaluation
+# ═══════════════════════════════════════════════════════════════════════════════
+# The full LLM-judge eval has ~12% yes-ratio because BLIP-2 captions are too
+# short to mention most relationships R-Bench asks about. The judge says "no"
+# not because the caption is WRONG, but because it OMITS the relationship.
+#
+# This cell filters to ONLY questions where the caption actually addresses
+# the relationship (i.e., the LLM judge says "yes" for at least one condition,
+# OR the caption contains keywords from the question). This isolates the
+# questions where corrections can actually make a difference.
+#
+# ★ RUN AFTER CELL E — uses the same 50-image LLM-judge results ★
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import os
+import re
+import json
+import pandas as pd
+
+REPO_DIR = "/content/RelCheck"
+EVAL_DIR = f"{REPO_DIR}/eval"
+
+# --- Load Cell E pivot results (or Cell A full results) ---
+# Try pivot test first (50 images), fall back to full LLM-judge
+B3_CSV = f"{EVAL_DIR}/baseline_llm_direct.csv"
+B1_CSV = f"{EVAL_DIR}/baseline_no_correction.csv"
+RC_CSV = f"{EVAL_DIR}/relcheck_results.csv"
+
+df_b3_f = pd.read_csv(B3_CSV)
+df_b1_f = pd.read_csv(B1_CSV)
+df_rc_f = pd.read_csv(RC_CSV)
+
+b3_image_ids_f = set(df_b3_f['image_id'].unique())
+df_b1_sub_f = df_b1_f[df_b1_f['image_id'].isin(b3_image_ids_f)].copy()
+df_rc_sub_f = df_rc_f[df_rc_f['image_id'].isin(b3_image_ids_f)].copy()
+
+b3_cap_map_f = dict(zip(df_b3_f['image_id'], df_b3_f['b3_corrected']))
+b1_cap_col_f = 'blip2_caption' if 'blip2_caption' in df_b1_sub_f.columns else 'original_caption'
+
+# --- Helper: check if caption "mentions" the relationship in the question ---
+def caption_mentions_relation(caption: str, question: str) -> bool:
+    """
+    Heuristic check: does the caption contain key content words from the question?
+    Extracts the verb/relation and main object from the question and checks if
+    similar words appear in the caption.
+    """
+    caption_lower = caption.lower()
+    question_lower = question.lower()
+
+    # Remove question scaffolding
+    q_clean = question_lower
+    for prefix in ["is there ", "is the ", "are the ", "does the ", "is a ", "are there "]:
+        q_clean = q_clean.replace(prefix, "")
+    q_clean = q_clean.rstrip("?").strip()
+
+    # Extract content words (skip very short/common words)
+    stop_words = {'a', 'an', 'the', 'in', 'on', 'of', 'to', 'and', 'is', 'are',
+                  'it', 'its', 'this', 'that', 'with', 'for', 'at', 'by', 'from',
+                  'or', 'be', 'was', 'were', 'been', 'being', 'image', 'photo',
+                  'picture', 'there', 'does', 'do', 'has', 'have', 'can', 'could'}
+    q_words = [w for w in re.findall(r'\w+', q_clean) if w not in stop_words and len(w) > 2]
+
+    if not q_words:
+        return False
+
+    # Check: does caption contain at least half the content words?
+    matches = sum(1 for w in q_words if w in caption_lower)
+    ratio = matches / len(q_words) if q_words else 0
+
+    return ratio >= 0.5
+
+
+# --- Filter questions where at least ONE caption mentions the relation ---
+mentioned_indices = []
+
+for idx, row in df_b1_sub_f.iterrows():
+    question = str(row['question'])
+    b1_cap = str(row[b1_cap_col_f])
+    b3_cap = str(b3_cap_map_f.get(row['image_id'], ''))
+
+    # Get RC caption for this image
+    rc_rows = df_rc_sub_f[df_rc_sub_f['image_id'] == row['image_id']]
+    rc_cap = str(rc_rows.iloc[0].get('corrected_caption', '')) if len(rc_rows) > 0 else ''
+
+    # If ANY caption mentions the relation, include this question
+    if (caption_mentions_relation(b1_cap, question) or
+        caption_mentions_relation(b3_cap, question) or
+        caption_mentions_relation(rc_cap, question)):
+        mentioned_indices.append(idx)
+
+print(f"Total questions: {len(df_b1_sub_f)}")
+print(f"Questions where caption mentions relation: {len(mentioned_indices)}")
+print(f"Questions where caption omits relation: {len(df_b1_sub_f) - len(mentioned_indices)}")
+print(f"Mention rate: {100*len(mentioned_indices)/len(df_b1_sub_f):.1f}%")
+
+if len(mentioned_indices) < 10:
+    print("\n⚠️  Too few mention-filtered questions for reliable metrics.")
+    print("    This confirms BLIP-2 captions rarely describe specific relationships.")
+    print("    Consider running on full 600 images for more signal.")
+else:
+    # --- Re-run LLM-judge on ONLY the mentioned questions ---
+    # We already have the judge results from Cell E, so just recompute metrics
+    # on the filtered subset
+
+    import together
+    import time
+    from tqdm import tqdm
+
+    TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY", "")
+    LLM_JUDGE_MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    client_f = together.Together(api_key=TOGETHER_API_KEY)
+
+    LLM_JUDGE_SYS_F = """You are a factual judge. Given an image caption and a yes/no question, \
+answer based ONLY on what the caption states. Do NOT use any external knowledge.
+
+If the caption explicitly or implicitly supports the answer "yes", respond "yes".
+If the caption contradicts the claim or does not mention it, respond "no".
+
+Respond with ONLY "yes" or "no" — nothing else."""
+
+    LLM_JUDGE_USR_F = """Caption: "{caption}"
+
+Question: {question}
+
+Based solely on what the caption says, answer yes or no:"""
+
+    def judge_f(caption, question, max_retries=3):
+        for attempt in range(max_retries):
+            try:
+                resp = client_f.chat.completions.create(
+                    model=LLM_JUDGE_MODEL,
+                    messages=[
+                        {"role": "system", "content": LLM_JUDGE_SYS_F},
+                        {"role": "user", "content": LLM_JUDGE_USR_F.format(
+                            caption=caption, question=question)},
+                    ],
+                    max_tokens=5, temperature=0.0,
+                )
+                ans = resp.choices[0].message.content.strip().lower()
+                return "yes" if "yes" in ans else "no"
+            except Exception:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                return "no"
+
+    df_filt = df_b1_sub_f.loc[mentioned_indices].copy()
+    df_filt['b3_caption'] = df_filt['image_id'].map(b3_cap_map_f)
+
+    # Get RC captions
+    rc_cap_map_f = {}
+    for img_id in df_filt['image_id'].unique():
+        rc_rows = df_rc_sub_f[df_rc_sub_f['image_id'] == img_id]
+        if len(rc_rows) > 0:
+            rc_cap_map_f[img_id] = str(rc_rows.iloc[0].get('corrected_caption', ''))
+    df_filt['rc_caption'] = df_filt['image_id'].map(rc_cap_map_f)
+
+    # Run judge on filtered questions
+    results = {'b1': [], 'b3': [], 'rc': []}
+    for _, row in tqdm(df_filt.iterrows(), total=len(df_filt), desc="Mention-filtered judge"):
+        q = str(row['question'])
+        gt = str(row['gt']).lower().strip()
+
+        b1_pred = judge_f(str(row[b1_cap_col_f]), q)
+        b3_pred = judge_f(str(row['b3_caption']), q)
+        rc_pred = judge_f(str(row.get('rc_caption', '')), q)
+
+        results['b1'].append({'pred': b1_pred, 'gt': gt})
+        results['b3'].append({'pred': b3_pred, 'gt': gt})
+        results['rc'].append({'pred': rc_pred, 'gt': gt})
+
+    b1_mf = compute_rpope_metrics(results['b1'])
+    b3_mf = compute_rpope_metrics(results['b3'])
+    rc_mf = compute_rpope_metrics(results['rc'])
+
+    print(f"\n{'='*75}")
+    print("  ★ MENTION-FILTERED LLM-Judge R-POPE ★")
+    print(f"  (Only questions where caption addresses the relationship)")
+    print(f"  Questions: {len(df_filt)} / {len(df_b1_sub_f)} total")
+    print(f"{'='*75}")
+    print(f"  {'Metric':<14} {'B1 (Original)':>14} {'B3 (LLM Direct)':>16} {'RelCheck':>14}")
+    print(f"  {'-'*60}")
+    for m in ['accuracy', 'precision', 'recall', 'f1', 'yes_ratio']:
+        v1, v3, vr = b1_mf[m], b3_mf[m], rc_mf[m]
+        best = max(v1, v3, vr) if m != 'yes_ratio' else None
+        marker = ""
+        if best:
+            if vr == best: marker = "  ★ RC wins"
+            elif v3 == best: marker = "  ⚠ B3 wins"
+        print(f"  {m:<14} {v1:>14.4f} {v3:>16.4f} {vr:>14.4f}{marker}")
+    print(f"{'='*75}")
+
+    print(f"\n  Yes-ratio check:")
+    print(f"    B1 yes-ratio: {b1_mf['yes_ratio']:.4f}  (should be much higher than ~0.12)")
+    print(f"    B3 yes-ratio: {b3_mf['yes_ratio']:.4f}")
+    print(f"    RC yes-ratio: {rc_mf['yes_ratio']:.4f}")
+
+    print(f"\n  B3 vs B1:  accuracy Δ = {b3_mf['accuracy'] - b1_mf['accuracy']:+.4f}")
+    print(f"  RC vs B1:  accuracy Δ = {rc_mf['accuracy'] - b1_mf['accuracy']:+.4f}")
+    print(f"  RC vs B3:  accuracy Δ = {rc_mf['accuracy'] - b3_mf['accuracy']:+.4f}")
+
+    # Save
+    mf_summary = {
+        "n_total_questions": len(df_b1_sub_f),
+        "n_filtered_questions": len(df_filt),
+        "mention_rate": round(len(mentioned_indices) / len(df_b1_sub_f), 4),
+        "B1_metrics": b1_mf,
+        "B3_metrics": b3_mf,
+        "RelCheck_metrics": rc_mf,
+        "delta_rc_vs_b1": round(rc_mf['accuracy'] - b1_mf['accuracy'], 4),
+        "delta_rc_vs_b3": round(rc_mf['accuracy'] - b3_mf['accuracy'], 4),
+    }
+    with open(f"{EVAL_DIR}/mention_filtered_eval.json", "w") as f:
+        json.dump(mf_summary, f, indent=2)
+    import shutil as _shutil
+    _shutil.copy2(f"{EVAL_DIR}/mention_filtered_eval.json", DRIVE_EVAL_DIR)
+    print(f"\n💾 Synced mention_filtered_eval.json → Drive")
+    print(f"✅ Mention-filtered eval saved to {EVAL_DIR}/mention_filtered_eval.json")
