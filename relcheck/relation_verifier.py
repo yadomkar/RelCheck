@@ -456,36 +456,46 @@ class SpatialVerifier:
 
 class LLaVAVerifier:
     """
-    Uses LLaVA-1.5-7B to verify action/attribute triples — fully independent
-    from BLIP-2, eliminating the circular self-verification problem.
+    Uses LLaVA-1.5-7B to verify action/attribute triples via a
+    Describe-and-Compare approach — fully independent from BLIP-2.
 
-    The model and processor are injected from outside (shared from the notebook)
-    to avoid loading a second copy and to stay within VRAM budget on A100.
+    Instead of binary yes/no VQA (which suffers from yes-bias and requires
+    arbitrary thresholds), we:
+      1. Ask LLaVA to DESCRIBE the relationship in the image (open-ended)
+      2. Use Llama-3.3-70B (text NLI) to compare the description against
+         the caption's claim
+      3. Consistent → supported, Inconsistent → hallucinated
 
-    Uses the same token-probability approach as VQAVerifier: reads yes/no logit
-    mass at the first generated token rather than greedy-decoded text.
+    Inspired by TIFA (ICCV 2023) decomposed QA, VQAScore (ICLR 2025)
+    insights on binary VQA limitations, and DSG (ICLR 2024) structured
+    scene graph verification.
 
-    Multi-question voting (inspired by VisMin, NeurIPS 2024): for each triple,
-    we generate 2-3 paraphrased questions and aggregate yes_ratios. This reduces
-    noise from single-question VQA and shrinks the uncertain zone.
+    Key advantages over binary VQA:
+      - No yes-bias (LLaVA describes, doesn't judge)
+      - No threshold tuning (Llama makes a semantic comparison)
+      - Evidence is free (LLaVA's description IS the correction evidence)
     """
 
-    CONVERSATION_TEMPLATE = "USER: <image>\n{question} Answer with yes or no only. ASSISTANT:"
+    DESCRIBE_TEMPLATE = "USER: <image>\n{question} Describe in one short sentence. ASSISTANT:"
 
-    def __init__(self, model=None, processor=None, num_paraphrases: int = 3):
+    def __init__(self, model=None, processor=None, together_client=None,
+                 num_paraphrases: int = 3):
         """
         Args:
-            model:          Pre-loaded LlavaForConditionalGeneration (injected from notebook).
-            processor:      Pre-loaded LlavaProcessor (injected from notebook).
-            num_paraphrases: Number of question variants to ask per triple (1 = original behavior).
-        If both model and processor are None, the verifier will load its own copy.
+            model:            Pre-loaded LlavaForConditionalGeneration.
+            processor:        Pre-loaded LlavaProcessor.
+            together_client:  together.Together client for Llama NLI calls.
+            num_paraphrases:  Kept for backward compat (unused in describe-and-compare).
         """
         self.num_paraphrases = num_paraphrases
+        self.together_client = together_client
+        self.NLI_MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+
         if model is not None and processor is not None:
             self.model     = model
             self.processor = processor
             self.device    = next(model.parameters()).device
-            print(f"[LLaVAVerifier] Using injected LLaVA model. Paraphrases: {num_paraphrases}")
+            print(f"[LLaVAVerifier] Using Describe-and-Compare verification.")
         else:
             self._load_model()
 
@@ -586,54 +596,16 @@ class LLaVAVerifier:
         total    = yes_prob + no_prob + 1e-9
         return yes_prob / total
 
-    def verify(self, image: Image.Image, triple: Triple) -> tuple[bool, float]:
+    # ------------------------------------------------------------------
+    # Step 1: Describe — ask LLaVA what the image shows
+    # ------------------------------------------------------------------
+
+    def _describe_relation(self, image: Image.Image, triple: Triple) -> str:
         """
-        Verify a triple using LLaVA with multi-question voting.
+        Ask LLaVA an open-ended question about the relationship between
+        subject and object. Returns a short descriptive sentence.
 
-        When num_paraphrases > 1, asks multiple paraphrased questions and
-        averages the yes_ratios for a more robust decision. This reduces
-        the uncertain zone and catches more hallucinations.
-
-        Returns (is_supported, confidence).
-        """
-        questions = self._build_paraphrased_questions(triple)
-
-        # Collect yes_ratios from all paraphrases
-        yes_ratios = []
-        for q in questions:
-            try:
-                yr = self._get_yes_ratio(image, q)
-                yes_ratios.append(yr)
-            except Exception:
-                continue   # skip failed paraphrases, use the rest
-
-        if not yes_ratios:
-            return True, 0.3   # all failed → uncertain
-
-        # Aggregate: average of yes_ratios
-        avg_yes_ratio = sum(yes_ratios) / len(yes_ratios)
-        is_yes = avg_yes_ratio >= 0.5
-        confidence = max(avg_yes_ratio, 1.0 - avg_yes_ratio)
-
-        # Ambiguous zone → uncertain (tightened: only flag hallucination below 0.35)
-        # This reduces false positives — corrections only happen when VQA is
-        # quite confident the relation is wrong. With 3 paraphrased questions,
-        # passive-voice variants can drag scores down for correct relations.
-        if 0.35 <= avg_yes_ratio < 0.65:
-            confidence = 0.3
-
-        return is_yes, confidence
-
-    EVIDENCE_TEMPLATE = "USER: <image>\n{question} Describe in one short sentence. ASSISTANT:"
-
-    def gather_evidence(self, image: Image.Image, triple: Triple) -> str:
-        """
-        Ask LLaVA an open-ended descriptive question about the relationship
-        between subject and object. Returns a short descriptive sentence that
-        can be fed to the corrector as evidence for guided correction.
-
-        Uses a separate prompt template (not the yes/no template) to get
-        descriptive answers instead of single-word responses.
+        This is the 'Describe' step of Describe-and-Compare.
         """
         s = _clean_query_for_vqa(triple.subject)
         o = _clean_query_for_vqa(triple.obj)
@@ -643,10 +615,9 @@ class LLaVAVerifier:
         elif triple.relation_type == "ATTRIBUTE":
             question = f"What does the {s} look like in this image?"
         else:
-            # ACTION / OTHER / INSTRUMENTAL
             question = f"What is the {s} doing in relation to the {o} in this image?"
 
-        prompt = self.EVIDENCE_TEMPLATE.format(question=question)
+        prompt = self.DESCRIBE_TEMPLATE.format(question=question)
 
         inputs = self.processor(
             text=prompt, images=image, return_tensors="pt"
@@ -659,13 +630,135 @@ class LLaVAVerifier:
                 do_sample=False,
             )
 
-        # Decode only the new tokens (skip the input prompt tokens)
         input_len = inputs["input_ids"].shape[1]
         answer = self.processor.tokenizer.decode(
             output_ids[0][input_len:], skip_special_tokens=True
         ).strip()
-
         return answer
+
+    # ------------------------------------------------------------------
+    # Step 2: Compare — use Llama to check semantic consistency
+    # ------------------------------------------------------------------
+
+    NLI_SYSTEM = (
+        "You are a semantic consistency judge. You will be given two descriptions "
+        "of a relationship in an image: one from a caption and one from an independent "
+        "visual model. Determine if they are semantically consistent — i.e., do they "
+        "describe the same relationship, even if worded differently?\n\n"
+        "Answer ONLY 'consistent' or 'inconsistent' — nothing else."
+    )
+
+    NLI_USER_TEMPLATE = (
+        "Caption claims: The relationship between '{subject}' and '{object}' is '{relation}'.\n"
+        "Visual model describes: {description}\n\n"
+        "Are these semantically consistent?"
+    )
+
+    def _compare_nli(self, triple: Triple, description: str) -> tuple[bool, float]:
+        """
+        Use Llama-3.3-70B to compare the caption's claim against LLaVA's
+        description. Returns (is_consistent, confidence).
+
+        This is the 'Compare' step of Describe-and-Compare.
+        No threshold needed — Llama makes a binary semantic judgement.
+        """
+        import time
+
+        if not self.together_client:
+            # No Llama available — fall back to keyword heuristic
+            return self._compare_heuristic(triple, description)
+
+        user_msg = self.NLI_USER_TEMPLATE.format(
+            subject=triple.subject,
+            object=triple.obj,
+            relation=triple.relation,
+            description=description,
+        )
+
+        for attempt in range(3):
+            try:
+                response = self.together_client.chat.completions.create(
+                    model=self.NLI_MODEL,
+                    messages=[
+                        {"role": "system", "content": self.NLI_SYSTEM},
+                        {"role": "user",   "content": user_msg},
+                    ],
+                    max_tokens=10,
+                    temperature=0.0,
+                )
+                answer = response.choices[0].message.content.strip().lower()
+
+                if "inconsistent" in answer:
+                    return False, 0.85   # high confidence hallucination
+                elif "consistent" in answer:
+                    return True, 0.85    # high confidence supported
+                else:
+                    return True, 0.3     # ambiguous → uncertain
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                print(f"  [NLI] Failed after 3 attempts: {e}")
+                return True, 0.3   # fail open → uncertain
+
+    def _compare_heuristic(self, triple: Triple, description: str) -> tuple[bool, float]:
+        """
+        Simple keyword-overlap fallback when Llama is unavailable.
+        Checks if the relation word (or a close variant) appears in the description.
+        """
+        desc_lower = description.lower()
+        rel_lower = triple.relation.lower()
+
+        # Check direct match
+        if rel_lower in desc_lower:
+            return True, 0.7
+
+        # Check -ing form
+        verb_ing = _to_present_participle(rel_lower)
+        if verb_ing in desc_lower:
+            return True, 0.7
+
+        # No match — possibly inconsistent, but low confidence
+        return False, 0.5
+
+    # ------------------------------------------------------------------
+    # Combined: Describe-and-Compare verification
+    # ------------------------------------------------------------------
+
+    def verify(self, image: Image.Image, triple: Triple) -> tuple[bool, float]:
+        """
+        Verify a triple using Describe-and-Compare:
+          1. Ask LLaVA to describe the relationship (open-ended)
+          2. Use Llama NLI to check semantic consistency with the caption
+          3. Store the description as vqa_evidence for the corrector
+
+        Returns (is_supported, confidence).
+        """
+        # Step 1: Describe
+        try:
+            description = self._describe_relation(image, triple)
+        except Exception as e:
+            print(f"  [LLaVA] Description failed: {e}")
+            return True, 0.3   # fail open → uncertain
+
+        if not description:
+            return True, 0.3
+
+        # Store description as evidence (used by corrector if hallucinated)
+        triple.vqa_evidence = description
+
+        # Step 2: Compare
+        is_consistent, confidence = self._compare_nli(triple, description)
+
+        return is_consistent, confidence
+
+    # Keep gather_evidence for backward compatibility — now just returns
+    # the already-stored vqa_evidence from the verify() step.
+    def gather_evidence(self, image: Image.Image, triple: Triple) -> str:
+        """Return stored evidence from verify(), or generate fresh if needed."""
+        if triple.vqa_evidence:
+            return triple.vqa_evidence
+        return self._describe_relation(image, triple)
 
     def verify_batch(self, image: Image.Image, triples: list[Triple]) -> list[tuple[bool, float]]:
         return [self.verify(image, t) for t in triples]
@@ -692,12 +785,14 @@ class RelationVerifier:
 
     CONFIDENCE_THRESHOLD = 0.45
 
-    def __init__(self, llava_model=None, llava_processor=None, num_paraphrases: int = 3):
+    def __init__(self, llava_model=None, llava_processor=None,
+                 num_paraphrases: int = 3, together_client=None):
         """
         Args:
             llava_model:      Injected LLaVA model for cross-model verification.
             llava_processor:  Injected LLaVA processor.
-            num_paraphrases:  Number of paraphrased questions per triple (1 = no voting).
+            num_paraphrases:  Kept for backward compat.
+            together_client:  together.Together client for Llama NLI (Describe-and-Compare).
         If LLaVA is not provided, falls back to BLIP-2 VQA (with yes-bias caveat).
         """
         self.spatial      = SpatialVerifier()
@@ -708,10 +803,11 @@ class RelationVerifier:
             self.llava = LLaVAVerifier(
                 model=llava_model,
                 processor=llava_processor,
+                together_client=together_client,
                 num_paraphrases=num_paraphrases,
             )
-            self.vqa   = None   # BLIP-2 VQA not needed when LLaVA is available
-            print("[RelationVerifier] Using LLaVA for action/attribute verification.")
+            self.vqa   = None
+            print("[RelationVerifier] Using Describe-and-Compare verification (LLaVA + Llama NLI).")
         else:
             self.llava = None
             self.vqa   = VQAVerifier()

@@ -127,11 +127,14 @@ class RelCheckPipeline:
         else:
             self.extractor = spacy_extractor
 
-        # Stage 2: Relation Verifier (with multi-question VQA voting)
+        # Stage 2: Relation Verifier (Describe-and-Compare with Llama NLI)
+        import together
+        together_client = together.Together(api_key=api_key) if api_key else None
         self.verifier = RelationVerifier(
             llava_model=llava_model,
             llava_processor=llava_processor,
             num_paraphrases=num_paraphrases,
+            together_client=together_client,
         )
         self.verifier.skip_spatial = skip_spatial
         self.verifier.skip_vqa     = skip_vqa
@@ -201,10 +204,8 @@ class RelCheckPipeline:
         hallucinated = [t for t in triples if t.hallucinated is True]
         print(f"[Pipeline] Hallucinated: {len(hallucinated)}/{len(triples)}")
 
-        # ── Stage 2b: Gather VQA evidence for hallucinated triples ─────────
-        if hallucinated and not self.detection_only:
-            print("[Pipeline] Gathering VQA evidence for guided correction...")
-            self.verifier.gather_evidence_batch(image, triples)
+        # NOTE: VQA evidence is now gathered DURING verification (Describe-and-Compare)
+        # — no separate evidence-gathering step needed.
 
         # ── Stage 3: Correct hallucinations ──────────────────────────────────
         if self.detection_only or not hallucinated or self.corrector is None:
