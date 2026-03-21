@@ -1,5 +1,5 @@
 # Memory — CS298 / RelCheck
-**Last updated:** 2026-03-20 (Session 4)
+**Last updated:** 2026-03-21 (Session 5)
 
 ---
 
@@ -41,9 +41,12 @@
 | **CLIPScore** | Reference-free image-caption alignment metric (CLIP embedding similarity) |
 | **R-Bench** | Benchmark dataset (Wu et al., ICML 2024) — 11,651 relational Q&A pairs on nocaps images |
 | **BLIP-2** | Vision-language model used for captioning (blip2-flan-t5-xl) |
-| **LLaVA-1.5-7B** | Cross-model verifier for action/attribute triples (independent from BLIP-2) |
-| **OWLv2** | google/owlv2-base-patch16-ensemble — open-vocab object detection for spatial verification (upgraded from OWL-ViT v1) |
+| **LLaVA-1.5-7B** | Legacy cross-model verifier — replaced by Llama-4-Maverick in Session 5 (too weak, 9-11/20 false positives) |
+| **GroundingDINO** | IDEA-Research/grounding-dino-tiny — zero-shot object detector for spatial geometry verification (replaces OWLv2 in Session 5) |
+| **Llama-4-Maverick** | meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8 — VLM for action/attribute verification via Together.ai (replaces LLaVA-1.5-7B in Session 5) |
+| **OWLv2** | google/owlv2-base-patch16-ensemble — legacy detector, replaced by GroundingDINO in Session 5 |
 | **OWL-ViT** | google/owlvit-base-patch32 — legacy detector, replaced by OWLv2 in Session 2 |
+| **Pix2Grp** | CVPR 2024 SGG model — attempted in Session 4, failed viability test |
 | **Llama-3.3-70B-Instruct-Turbo** | LLM for triple extraction + correction via Together.ai (replaced Mistral-7B) |
 | **Together.ai** | API provider for Llama-3.3-70B (paid credits) |
 | **Woodpecker** | Related work — corrects object hallucinations but ignores relational structure |
@@ -180,90 +183,115 @@ This directly measures caption quality because the LLM can ONLY use the caption.
 
 ---
 
-## Status (as of 2026-03-20, Session 4)
+## Status (as of 2026-03-21, Session 5)
 
 ### Session 3 Recap
 - eval_cells.py updated with Cell 0 (metrics helper), Cell D (B3 baseline), Cell E (pivot test)
 - ALL ablation variants produce identical R-POPE (VQA) scores (~75.4%), confirming VQA insensitivity
 - **Reefknot (ACL Findings 2025)**: Closest competitor — modifies internal model probabilities (not black-box), no corrected caption output
 
-### Session 4: Architecture Pivot — Scene Graph Grounded Approach
+### Session 4 Recap: Pix2Grp Attempt
+- Chose Pix2Grp (CVPR 2024) for scene graph grounding
+- **FAILED viability test** — Pix2Grp did not produce useful scene graphs on test images
+- SGG models in general have only 40-55% mRecall on action predicates
+- Decision: abandon SGG-based approach entirely
 
-**Why pivot:** LLaVA-1.5-7B verification produced garbage corrections (9-11/20 false positives, literal evidence insertion, broken grammar). VisMin (NeurIPS 2024) confirms VLMs perform below random on spatial relations. Patching won't fix a fundamentally unreliable verifier.
+### Session 5: Architecture Pivot — Type-Aware Verification (GroundingDINO + VLM)
 
-**Key research finding (Session 4):** No reliable off-the-shelf action relation verifier exists. Even SOTA SGG models hit only 40-55% mRecall on action predicates. But scene graph models ARE the best available tool — they handle both spatial AND action relations, unlike bounding box geometry alone.
+**Why pivot from SGG:** Pix2Grp failed viability test. Even SOTA SGG models are unreliable on action predicates. Scene graph approach was too fragile for a 13-day deadline.
 
-**SGG Model Research (Session 4):**
+**New approach:** Replace both the failed LLaVA-1.5-7B verifier (Session 2-3) and the failed Pix2Grp SGG (Session 4) with a type-aware split: deterministic geometry for spatial relations + strong VLM for action/attribute relations.
 
-| Model | PyTorch Compat | Action Relations | Setup | Verdict |
-|-------|---------------|-----------------|-------|---------|
-| **Pix2Grp/PGSG (CVPR 2024)** | ✅ Native 2.0.0 | ✅ Yes | 1-2 hrs | **🟢 CHOSEN — best Colab fit** |
-| **OvSGTR (ECCV 2024)** | ✅ Flexible (no pin) | ✅ Open-vocab | 3-5 hrs | 🟡 Backup (C++ compilation risk) |
-| **EGTR (CVPR 2024)** | ⚠️ PyTorch 1.12 | ✅ Yes | 2-4 hrs | 🟡 Risky |
-| **RelTR** | ❌ PyTorch 1.6 hard req | ✅ Yes | Won't work | 🔴 Dead |
-| **Florence-2** | ✅ HuggingFace | ❌ No SGG task | <1 hr | 🔴 Not for SGG |
-
-**Key correction from earlier:** OvSGTR does NOT require PyTorch 1.9.1 (no version pinned). GroundingDINO-only was insufficient because bbox geometry cannot verify action relations (holding, riding, eating). Pix2Grp generates full scene graphs including action predicates.
-
-**Relevant papers for new approach:**
-- **LLM4SGG (CVPR 2024)** — LLM-based scene graph generation, proves LLM+SGG works
-- **GPT4SGG (NeurIPS 2023)** — BLIP-2 captions + GPT synthesizes scene graph
-- **Reefknot (ACL Findings 2025)** — closest competitor, but modifies internal model probs (not black-box)
+**Key insight:** Different relation types need fundamentally different verification strategies. Spatial relations ARE geometric facts (verifiable from bounding boxes). Action relations need visual understanding (require a capable VLM, not LLaVA-7B).
 
 ### New RelCheck v2 Pipeline (5 Stages)
 
 1. **BLIP-2** → generates caption (unchanged)
-2. **Pix2Grp (CVPR 2024)** → scene graph from image: (subject, predicate, object) including spatial AND action relations
-3. **GroundingDINO** → detects objects + bounding boxes (supplements Pix2Grp with precise spatial geometry)
-4. **Llama-3.3-70B Comparator** → compares caption claims against scene graph KB, identifies contradictions (text-only NLI)
-5. **Llama-3.3-70B Corrector** → fixes only contradicted spans with KB evidence
+2. **Llama-3.3-70B** → extract (subject, relation, object) triples + classify type (SPATIAL/ACTION/ATTRIBUTE)
+3. **GroundingDINO** (IDEA-Research/grounding-dino-tiny via HuggingFace) → detect objects + bboxes
+   - **Spatial triples** → bbox geometry rules (deterministic: "on" = subject above object + horizontal overlap, etc.)
+   - Failed detections → fall through to VLM
+4. **Llama-4-Maverick VLM** (meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8 via Together.ai) → verify action/attribute triples
+   - Multi-question voting: 3 paraphrased yes/no questions, averaged yes_ratios
+   - Cross-model verification (BLIP-2 generated caption, Maverick verifies — uncorrelated biases)
+5. **Llama-3.3-70B Corrector** → structured evidence + minimal correction + fluency gate
+   - Batch correction for 2+ hallucinations (from Session 2)
+   - Structured evidence format (prevents literal evidence insertion bug from Session 2)
+
+### Why This Architecture (Reviewer-Ready Arguments)
+
+1. **Type-aware routing is the core contribution** — no prior work (Woodpecker, LURE, Reefknot) splits verification by relation type
+2. **GroundingDINO spatial verification is deterministic** — zero hallucination risk from verifier, unlike VQA
+3. **Llama-4-Maverick >> LLaVA-1.5-7B** — much stronger VLM for action verification (17B MoE vs 7B)
+4. **Training-free + black-box** — works on any captioning model (vs Reefknot which needs model internals)
+5. **"Just use a better captioner" objection** — plan to run RelCheck on InternVL2 captions too, showing improvement even on stronger models
+
+### Corrector Safeguards (from Session 2-3 failure analysis)
+
+1. **Fewer false positives** — GroundingDINO is deterministic; Maverick is much stronger than LLaVA
+2. **Structured evidence format** — prevents literal evidence insertion into captions
+3. **Fluency gate** — BLEU-4 threshold; reject corrections that destroy grammar
+4. **Batch correction** — single LLM call for 2+ hallucinations (no cascading drift)
+5. **Self-consistency check** — re-verify corrected triples (optional verification loop ablation)
 
 ### Research Contributions (4 total)
 1. **Problem**: Relational hallucinations need specialized handling (vs. Woodpecker/LURE for objects)
-2. **Detection**: Scene graph grounding outperforms VQA-based approaches (KB source ablation)
-3. **Correction**: Structured evidence + verification loop > blind correction (correction ablation)
+2. **Detection**: Type-aware verification (geometry for spatial, VLM for action) outperforms uniform approaches
+3. **Correction**: Structured evidence + fluency gate > blind correction
 4. **Evaluation**: R-POPE (VQA) is insensitive; LLM-judge R-POPE measures caption quality directly
 
-### Ablation Design (2 dimensions)
+### Ablation Design (tests type-aware routing claim)
 
-**Dimension 1 — KB Source (4 variants):**
-- No KB (B3 baseline — LLM corrects blindly)
-- GroundingDINO geometry only (spatial relations from bbox, no actions)
-- Pix2Grp scene graph only (spatial + action, no precise geometry)
-- Full: Pix2Grp + GroundingDINO combined
+**Dimension 1 — Verification strategy:**
+- B1: No correction (original BLIP-2)
+- B2: Self-refinement (BLIP-2 re-checks itself)
+- B3: Blind LLM correction (Llama corrects with no evidence)
+- GroundingDINO geometry only (spatial verified, actions auto-approved)
+- VLM only (all relations verified by Maverick, no geometry)
+- **Full RelCheck: type-aware routing** (spatial → geometry, action → VLM)
 
-**Dimension 2 — Correction Method (4 variants):**
-- B3: No evidence ("fix hallucinations in this caption")
-- KB dump: Full KB given unstructured
-- Structured: Only contradictions + specific KB facts highlighted
-- Structured + verification loop: correct → re-verify → correct again if needed
+**Dimension 2 — Correction method:**
+- No evidence (B3)
+- Raw evidence dump
+- Structured evidence (targeted contradiction + facts)
+- Structured + verification loop
 
-### Key Files
+### Key Files (Session 5)
 | File | What |
 |------|------|
-| `RelCheck_Viability_Test.ipynb` | 5-image viability test for Pix2Grp approach |
+| `RelCheck_Viability_Test_v2.ipynb` | 5-image viability test for GroundingDINO + Maverick approach |
+| `RelCheck_Viability_Test.ipynb` | OLD — Pix2Grp approach (failed) |
 | `EVIDENCE_CHECKLIST.md` | Master list of all 10 tables + 6 figures needed |
+
+### Models Used (Session 5)
+| Model | ID | Where | Purpose |
+|-------|----|-------|---------|
+| **BLIP-2** | Salesforce/blip2-flan-t5-xl | Colab GPU | Caption generation (target model) |
+| **GroundingDINO** | IDEA-Research/grounding-dino-tiny | Colab GPU | Object detection for spatial geometry |
+| **Llama-4-Maverick** | meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8 | Together.ai API | VLM action/attribute verification |
+| **Llama-3.3-70B** | meta-llama/Llama-3.3-70B-Instruct-Turbo | Together.ai API | Triple extraction + correction |
 
 ---
 
-## Revised Plan — 14 Days Remaining (April 3 deadline)
+## Revised Plan — 13 Days Remaining (April 3 deadline)
 
 | Day | Task | Time Est |
 |-----|------|----------|
-| **Day 1 (Mar 21)** | ★ Run viability test (Pix2Grp + GroundingDINO on 5 images) — DECISION GATE | 3 hrs |
-| **Days 2-4 (Mar 22-24)** | Build full pipeline + 4 KB source variants + 4 correction variants | 12 hrs |
-| **Days 5-6 (Mar 25-26)** | Full 600-image run + all evaluation metrics | 10 hrs |
-| **Day 7 (Mar 27)** | Error analysis, qualitative examples, threshold sensitivity | 4 hrs |
+| **Day 1 (Mar 21)** | ★ Run viability test v2 (GroundingDINO + Maverick on 5 images) — DECISION GATE | 2 hrs |
+| **Days 2-3 (Mar 22-23)** | Build full pipeline modules (relcheck v2) | 8 hrs |
+| **Days 4-5 (Mar 24-25)** | Full 600-image run + all evaluation metrics | 10 hrs |
+| **Day 6 (Mar 26)** | Multi-model experiment (RelCheck on InternVL2 captions) | 4 hrs |
+| **Day 7 (Mar 27)** | Error analysis, qualitative examples, ablation tables | 4 hrs |
 | **Days 8-12 (Mar 28-31)** | Report writing (~45-50 pages) | 15 hrs |
-| **Days 13-14 (Apr 1-2)** | Code cleanup, polish, buffer | 4 hrs |
+| **Day 13 (Apr 1-2)** | Code cleanup, polish, buffer | 4 hrs |
 
-### Priority for Day 1 (Tomorrow, Mar 21)
-1. Open `RelCheck_Viability_Test.ipynb` in Colab
+### Priority for Today (Mar 21)
+1. Open `RelCheck_Viability_Test_v2.ipynb` in Colab
 2. Paste Together API key in Cell 1
-3. Run Cells 1-8 sequentially
-4. **Decision gate at Cell 8**: Do Pix2Grp scene graphs contain meaningful action+spatial predicates? Are corrections sensible on ≥3/5 images?
-5. If YES → start building full pipeline (come back to Cowork for code)
-6. If NO → fall back to OvSGTR or GroundingDINO+region-captioning
+3. Run Cells 1-9 sequentially
+4. **Decision gate at Cell 9**: Are corrections sensible on ≥3/5 images?
+5. If YES → start building full pipeline modules
+6. If NO → investigate which component failed (GroundingDINO detection? VLM answers? Correction quality?)
 
 ---
 
