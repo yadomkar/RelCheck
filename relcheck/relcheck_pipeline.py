@@ -198,6 +198,10 @@ class RelCheckPipeline:
         triples = self.extractor.extract(caption)
         print(f"[Pipeline] Extracted {len(triples)} triple(s).")
 
+        # ── Stage 1b: Filter garbage triples ─────────────────────────────────
+        triples = self._filter_triples(triples, caption)
+        print(f"[Pipeline] After filtering: {len(triples)} triple(s).")
+
         # ── Stage 2: Verify triples ───────────────────────────────────────────
         triples = self.verifier.verify_all(image, triples)
 
@@ -227,6 +231,48 @@ class RelCheckPipeline:
             corrected_caption=corrected_caption,
             triples=triples,
         )
+
+    @staticmethod
+    def _filter_triples(triples: list[Triple], caption: str) -> list[Triple]:
+        """
+        Remove garbage triples that would cause false positives or bad corrections.
+
+        Filters out:
+          - Triples with empty/none/null objects or subjects
+          - Self-referential triples (subject == object)
+          - Triples with 'be' as relation and nonsensical objects
+          - Triples where the relation doesn't appear in the caption at all
+        """
+        filtered = []
+        caption_lower = caption.lower()
+
+        for t in triples:
+            subj = t.subject.strip().lower()
+            obj = t.obj.strip().lower()
+            rel = t.relation.strip().lower()
+
+            # Skip empty/none objects or subjects
+            if not obj or obj in ("none", "null", "n/a", ""):
+                print(f"  [Filter] Dropped: ({t.subject}, {t.relation}, {t.obj}) — empty/none object")
+                continue
+            if not subj or subj in ("none", "null", "n/a", ""):
+                print(f"  [Filter] Dropped: ({t.subject}, {t.relation}, {t.obj}) — empty/none subject")
+                continue
+
+            # Skip self-referential
+            if subj == obj:
+                print(f"  [Filter] Dropped: ({t.subject}, {t.relation}, {t.obj}) — self-referential")
+                continue
+
+            # Skip 'be' relations with objects that aren't in the caption
+            # (these are usually extraction artifacts like "leaf be none")
+            if rel == "be" and obj not in caption_lower:
+                print(f"  [Filter] Dropped: ({t.subject}, {t.relation}, {t.obj}) — 'be' with out-of-caption object")
+                continue
+
+            filtered.append(t)
+
+        return filtered
 
     def _validate_correction(
         self,
