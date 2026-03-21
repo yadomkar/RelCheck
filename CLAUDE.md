@@ -1,5 +1,5 @@
 # Memory — CS298 / RelCheck
-**Last updated:** 2026-03-20 (Session 3)
+**Last updated:** 2026-03-20 (Session 4)
 
 ---
 
@@ -180,51 +180,90 @@ This directly measures caption quality because the LLM can ONLY use the caption.
 
 ---
 
-## Status (as of 2026-03-20, Session 3)
+## Status (as of 2026-03-20, Session 4)
 
-- **Session 2 code changes**: committed + pushed to GitHub (commit `60a6200`)
-- **Session 3 additions**: eval_cells.py updated with Cell 0 (metrics helper), Cell D (B3 baseline), Cell E (pivot test)
-- **Ablation results confirmed**: ALL ablation variants produce identical R-POPE (VQA) scores (~75.4%), proving R-POPE (VQA) is insensitive — this is expected, not a bug
-- **Critical finding**: Need LLM direct-correction baseline (B3) to prove structured pipeline adds value
-- **eval_cells.py now contains**: Cell 0 (compute_rpope_metrics), Cell A (LLM-judge R-POPE), Cell B (CLIPScore), Cell C (Filtered R-POPE), Cell D (B3 LLM direct-correction), Cell E (pivot test: B3 vs RelCheck)
+### Session 3 Recap
+- eval_cells.py updated with Cell 0 (metrics helper), Cell D (B3 baseline), Cell E (pivot test)
+- ALL ablation variants produce identical R-POPE (VQA) scores (~75.4%), confirming VQA insensitivity
+- **Reefknot (ACL Findings 2025)**: Closest competitor — modifies internal model probabilities (not black-box), no corrected caption output
 
-### Literature Review (Session 3)
-- **Reefknot (ACL Findings 2025)**: Closest competitor — Detect-Then-Calibrate for relation hallucinations, but modifies internal model probabilities (not black-box), no corrected caption output
-- **RelCheck differentiators vs Reefknot**: (1) explicit corrected captions, (2) type-aware geometric+VQA verification, (3) training-free black-box approach, (4) interpretable per-triple decisions
+### Session 4: Architecture Pivot — Scene Graph Grounded Approach
+
+**Why pivot:** LLaVA-1.5-7B verification produced garbage corrections (9-11/20 false positives, literal evidence insertion, broken grammar). VisMin (NeurIPS 2024) confirms VLMs perform below random on spatial relations. Patching won't fix a fundamentally unreliable verifier.
+
+**Key research finding (Session 4):** No reliable off-the-shelf action relation verifier exists. Even SOTA SGG models hit only 40-55% mRecall on action predicates. But scene graph models ARE the best available tool — they handle both spatial AND action relations, unlike bounding box geometry alone.
+
+**SGG Model Research (Session 4):**
+
+| Model | PyTorch Compat | Action Relations | Setup | Verdict |
+|-------|---------------|-----------------|-------|---------|
+| **Pix2Grp/PGSG (CVPR 2024)** | ✅ Native 2.0.0 | ✅ Yes | 1-2 hrs | **🟢 CHOSEN — best Colab fit** |
+| **OvSGTR (ECCV 2024)** | ✅ Flexible (no pin) | ✅ Open-vocab | 3-5 hrs | 🟡 Backup (C++ compilation risk) |
+| **EGTR (CVPR 2024)** | ⚠️ PyTorch 1.12 | ✅ Yes | 2-4 hrs | 🟡 Risky |
+| **RelTR** | ❌ PyTorch 1.6 hard req | ✅ Yes | Won't work | 🔴 Dead |
+| **Florence-2** | ✅ HuggingFace | ❌ No SGG task | <1 hr | 🔴 Not for SGG |
+
+**Key correction from earlier:** OvSGTR does NOT require PyTorch 1.9.1 (no version pinned). GroundingDINO-only was insufficient because bbox geometry cannot verify action relations (holding, riding, eating). Pix2Grp generates full scene graphs including action predicates.
+
+**Relevant papers for new approach:**
+- **LLM4SGG (CVPR 2024)** — LLM-based scene graph generation, proves LLM+SGG works
+- **GPT4SGG (NeurIPS 2023)** — BLIP-2 captions + GPT synthesizes scene graph
+- **Reefknot (ACL Findings 2025)** — closest competitor, but modifies internal model probs (not black-box)
+
+### New RelCheck v2 Pipeline (5 Stages)
+
+1. **BLIP-2** → generates caption (unchanged)
+2. **Pix2Grp (CVPR 2024)** → scene graph from image: (subject, predicate, object) including spatial AND action relations
+3. **GroundingDINO** → detects objects + bounding boxes (supplements Pix2Grp with precise spatial geometry)
+4. **Llama-3.3-70B Comparator** → compares caption claims against scene graph KB, identifies contradictions (text-only NLI)
+5. **Llama-3.3-70B Corrector** → fixes only contradicted spans with KB evidence
+
+### Research Contributions (4 total)
+1. **Problem**: Relational hallucinations need specialized handling (vs. Woodpecker/LURE for objects)
+2. **Detection**: Scene graph grounding outperforms VQA-based approaches (KB source ablation)
+3. **Correction**: Structured evidence + verification loop > blind correction (correction ablation)
+4. **Evaluation**: R-POPE (VQA) is insensitive; LLM-judge R-POPE measures caption quality directly
+
+### Ablation Design (2 dimensions)
+
+**Dimension 1 — KB Source (4 variants):**
+- No KB (B3 baseline — LLM corrects blindly)
+- GroundingDINO geometry only (spatial relations from bbox, no actions)
+- Pix2Grp scene graph only (spatial + action, no precise geometry)
+- Full: Pix2Grp + GroundingDINO combined
+
+**Dimension 2 — Correction Method (4 variants):**
+- B3: No evidence ("fix hallucinations in this caption")
+- KB dump: Full KB given unstructured
+- Structured: Only contradictions + specific KB facts highlighted
+- Structured + verification loop: correct → re-verify → correct again if needed
+
+### Key Files
+| File | What |
+|------|------|
+| `RelCheck_Viability_Test.ipynb` | 5-image viability test for Pix2Grp approach |
+| `EVIDENCE_CHECKLIST.md` | Master list of all 10 tables + 6 figures needed |
 
 ---
 
-## Session 3 Weaknesses Identified + Fixes
-
-| # | Weakness | Fix | Status |
-|---|----------|-----|--------|
-| 1 | R-POPE (VQA) insensitive to caption changes | LLM-judge R-POPE (Cell A) | ✅ Written |
-| 2 | Missing LLM direct-correction baseline | B3 baseline (Cell D) + pivot test (Cell E) | ✅ Written |
-| 3 | Small effect size (119/600 corrected) | Re-run with Session 2 fixes; expect 200+ | ⬜ Needs re-run |
-| 4 | Triple extraction quality unknown | Manual analysis of 30-50 captions | ⬜ Pending |
-| 5 | No threshold sensitivity analysis | Vary yes_ratio 0.50→0.70, plot accuracy curve | ⬜ Pending |
-| 6 | No runtime profiling | Add timing to pipeline loop | ⬜ Pending |
-| 7 | Single captioning model (BLIP-2 only) | InstructBLIP generalizability run | ⬜ Pending |
-
----
-
-## Revised Plan — 6 Days Remaining (~April 1 deadline)
+## Revised Plan — 14 Days Remaining (April 3 deadline)
 
 | Day | Task | Time Est |
 |-----|------|----------|
-| **Day 3 (Mar 20)** | ★ Run Cell D+E (pivot test, 50 imgs, ~25 min); git pull + re-run Section 6 (600 imgs) | 4 hrs |
-| **Day 4 (Mar 21)** | Run Cell A (LLM-judge R-POPE, full 600); Cell B (CLIPScore); Cell C (Filtered) | 4 hrs |
-| **Day 5 (Mar 22)** | R-CHAIR annotation (50 images manual); InstructBLIP generalizability | 4 hrs |
-| **Day 6 (Mar 23)** | Error analysis, qualitative examples, runtime profiling, threshold sensitivity | 3 hrs |
-| **Day 7-8 (Mar 24-25)** | Publication-quality figures + LaTeX tables | 6 hrs |
-| **Day 9-10 (Mar 26-27)** | Code cleanup, README, requirements.txt, final report | 4 hrs |
+| **Day 1 (Mar 21)** | ★ Run viability test (Pix2Grp + GroundingDINO on 5 images) — DECISION GATE | 3 hrs |
+| **Days 2-4 (Mar 22-24)** | Build full pipeline + 4 KB source variants + 4 correction variants | 12 hrs |
+| **Days 5-6 (Mar 25-26)** | Full 600-image run + all evaluation metrics | 10 hrs |
+| **Day 7 (Mar 27)** | Error analysis, qualitative examples, threshold sensitivity | 4 hrs |
+| **Days 8-12 (Mar 28-31)** | Report writing (~45-50 pages) | 15 hrs |
+| **Days 13-14 (Apr 1-2)** | Code cleanup, polish, buffer | 4 hrs |
 
-### Priority Order for RIGHT NOW
-1. **Run Cell 0 + Cell D + Cell E** (pivot test — 25 min, uses existing B1 captions, NO re-run needed)
-2. **Decision point**: Does RelCheck beat B3? If yes → proceed. If no → pivot strategy.
-3. `git pull` in Colab → re-run Section 6 (full pipeline with Session 2 fixes)
-4. Run Cell A (LLM-judge R-POPE) on new results
-5. Remaining eval cells (B, C)
+### Priority for Day 1 (Tomorrow, Mar 21)
+1. Open `RelCheck_Viability_Test.ipynb` in Colab
+2. Paste Together API key in Cell 1
+3. Run Cells 1-8 sequentially
+4. **Decision gate at Cell 8**: Do Pix2Grp scene graphs contain meaningful action+spatial predicates? Are corrections sensible on ≥3/5 images?
+5. If YES → start building full pipeline (come back to Cowork for code)
+6. If NO → fall back to OvSGTR or GroundingDINO+region-captioning
 
 ---
 
