@@ -1,5 +1,5 @@
 # Memory — CS298 / RelCheck
-**Last updated:** 2026-03-21 (Session 5)
+**Last updated:** 2026-03-23 (Session 6)
 
 ---
 
@@ -35,7 +35,8 @@
 | **MLLM** | Multimodal Large Language Model (e.g., BLIP-2) |
 | **Triple** | (subject, relation, object) — structured unit extracted from a caption |
 | **R-POPE (VQA)** | Current eval: LLaVA(image + caption, question) → yes/no vs GT. Problem: LLaVA ignores caption, uses image directly |
-| **R-POPE (NLI/LLM-judge)** | Proposed fix: Llama-3.3-70B(caption only, question) → yes/no vs GT. Measures caption quality directly |
+| **R-POPE (NLI/LLM-judge)** | Llama-3.3-70B(caption only, question) → yes/no vs GT. Measures caption quality directly. ✅ Working — +5.8% on 100 images |
+| **Enrichment** | Key insight from Session 6: BLIP-2's main problem is omissions (45%), not false claims (2%). Enrichment = fix errors + add verified missing KB facts in ≤3 sentences |
 | **R-CHAIR_s** | % captions with ≥1 relational hallucination (caption-level) |
 | **R-CHAIR_i** | % of total triples that are hallucinated (triple-level) |
 | **CLIPScore** | Reference-free image-caption alignment metric (CLIP embedding similarity) |
@@ -183,7 +184,58 @@ This directly measures caption quality because the LLM can ONLY use the caption.
 
 ---
 
-## Status (as of 2026-03-21, Session 5)
+## Status (as of 2026-03-23, Session 6)
+
+### Session 6: Enrichment Approach + First R-POPE Improvement
+
+**Problem solved:** R-POPE (VQA) showed 0% improvement because LLaVA answers from the image. R-POPE (LLM-judge) with Llama-3.3-70B measures caption quality directly — and correction-only still showed 0% because BLIP-2's errors are mainly omissions, not false claims.
+
+**Key insight:** BLIP-2 baseline has 53.1% R-POPE accuracy with 45% omissions and only 2% false claims. Correction-only fixes the 2% but can't help the 45%. Enrichment addresses both: fix errors + add verified missing facts from KB.
+
+**Enrichment pipeline (Cell 5 of RelCheck_Enriched_100.ipynb):**
+1. Build Visual KB (GroundingDINO detections + Maverick VLM description)
+2. Llama-3.3-70B single-call analysis: find errors + missing facts → produce improved caption in JSON
+3. Guard: only use rewrite if errors or missing facts found
+4. Safeguards: sentence count ≤4, LLM verification against KB (faithfulness + fluency + coherence), safe default on failure
+5. Verification checks against KB (not original caption) — only FAILs for: KB contradiction, bad grammar, nonsensical repetition
+
+**Results (100 images, 277 R-Bench questions):**
+
+| Metric | BLIP-2 (Original) | RelCheck (Enriched) | Delta |
+|--------|-------------------|-------------------|-------|
+| R-POPE Accuracy | 147/277 (53.1%) | 163/277 (58.8%) | **+5.8%** |
+| Images modified | — | 88/100 | — |
+| Modified-only accuracy | 53.3% | 59.8% | +6.5% |
+| Questions improved | — | 21 | — |
+| Questions regressed | — | 5 | — |
+| Net improvement | — | +16 | — |
+
+**By relation type:** SPATIAL +12, ACTION +4, ATTRIBUTE +1, OTHER -1
+
+**Bugs fixed this session:**
+- Verification was comparing to original caption (rejected all enrichments) → changed to verify against KB
+- Edit rate gate rejected everything (BLIP-2 captions ~30 chars, enriched ~150 chars) → removed gate, kept for reporting
+- Every caption was being rewritten → added `if errors_found or missing_found:` guard
+- Verification didn't check fluency → added grammar/coherence/repetition checks
+- Verification API failure kept unverified rewrite → now keeps original
+
+**Key files:**
+
+| File | What |
+|------|------|
+| `RelCheck_Enriched_100.ipynb` | Main 100-image enrichment notebook (7 code cells) |
+| `RelCheck_Screening.ipynb` | Screening notebook — finds R-Bench images with hallucinations |
+
+**Remaining work:**
+- Analyze 5 regressed questions (could push to +7%+)
+- Scale to 600 images
+- R-CHAIR evaluation
+- Multi-model experiment (InternVL2)
+- Report writing (~45-50 pages)
+
+---
+
+## Previous Status (Session 5)
 
 ### Session 3 Recap
 - eval_cells.py updated with Cell 0 (metrics helper), Cell D (B3 baseline), Cell E (pivot test)
@@ -273,25 +325,18 @@ This directly measures caption quality because the LLM can ONLY use the caption.
 
 ---
 
-## Revised Plan — 13 Days Remaining (April 3 deadline)
+## Revised Plan — 11 Days Remaining (April 3 deadline)
 
 | Day | Task | Time Est |
 |-----|------|----------|
-| **Day 1 (Mar 21)** | ★ Run viability test v2 (GroundingDINO + Maverick on 5 images) — DECISION GATE | 2 hrs |
-| **Days 2-3 (Mar 22-23)** | Build full pipeline modules (relcheck v2) | 8 hrs |
-| **Days 4-5 (Mar 24-25)** | Full 600-image run + all evaluation metrics | 10 hrs |
+| **Day 1 (Mar 21)** | ✅ Viability test v2 (GroundingDINO + Maverick) — PASSED | Done |
+| **Days 2-3 (Mar 22-23)** | ✅ Built enriched pipeline, first +5.8% R-POPE result on 100 images | Done |
+| **Day 4 (Mar 24)** | Analyze regressions, optimize, scale to 600 images | 6 hrs |
+| **Day 5 (Mar 25)** | Full 600-image run + all evaluation metrics | 6 hrs |
 | **Day 6 (Mar 26)** | Multi-model experiment (RelCheck on InternVL2 captions) | 4 hrs |
 | **Day 7 (Mar 27)** | Error analysis, qualitative examples, ablation tables | 4 hrs |
-| **Days 8-12 (Mar 28-31)** | Report writing (~45-50 pages) | 15 hrs |
-| **Day 13 (Apr 1-2)** | Code cleanup, polish, buffer | 4 hrs |
-
-### Priority for Today (Mar 21)
-1. Open `RelCheck_Viability_Test_v2.ipynb` in Colab
-2. Paste Together API key in Cell 1
-3. Run Cells 1-9 sequentially
-4. **Decision gate at Cell 9**: Are corrections sensible on ≥3/5 images?
-5. If YES → start building full pipeline modules
-6. If NO → investigate which component failed (GroundingDINO detection? VLM answers? Correction quality?)
+| **Days 8-11 (Mar 28-31)** | Report writing (~45-50 pages) | 15 hrs |
+| **Day 12 (Apr 1-2)** | Code cleanup, polish, buffer | 4 hrs |
 
 ---
 
