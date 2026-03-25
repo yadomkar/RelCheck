@@ -1,5 +1,5 @@
 # Memory — CS298 / RelCheck
-**Last updated:** 2026-03-23 (Session 6)
+**Last updated:** 2026-03-25 (Session 7)
 
 ---
 
@@ -235,6 +235,60 @@ This directly measures caption quality because the LLM can ONLY use the caption.
 
 ---
 
+## Status (as of 2026-03-25, Session 7)
+
+### Session 7: Full 600-Image Notebook + Bug Fixes
+
+**Deliverable:** `RelCheck_600.ipynb` — comprehensive 16-cell notebook that produces ALL evidence for the CS298 report in a single automated run. Zero manual work required.
+
+**Notebook structure (16 cells):**
+
+| Cell | What | Output |
+|------|------|--------|
+| 0 | Markdown overview | — |
+| 1 | Setup + constants + `llm_call()` + checkpoint helpers | — |
+| 2 | Load GDINO + BLIP-2 models | GPU models |
+| 3 | Load images + R-Bench data (random N_IMAGES sample) | Image dict |
+| 4 | BLIP-2 captioning | `captions.json` checkpoint |
+| 5 | KB construction (GDINO + Maverick) with per-image timing | `kb_results.json` checkpoint |
+| 6 | Full RelCheck enrichment with per-image timing | `enriched.json` checkpoint |
+| 7 | Ablation correctors (B2, B3, KB-obj, KB-geom, KB-dump) — post-hoc from saved KB | `ablation_captions.json` checkpoint |
+| 8 | R-POPE LLM-Judge (all 7 methods) + McNemar's test | Tables 1, 3, 4, 7, 8 + `rpope_results.json` |
+| 9 | CLIPScore via OpenCLIP | Table 5 |
+| 10 | Pipeline stats + all CSVs | Table 9 + 5 CSV files |
+| 11 | Qualitative examples with bbox visualizations + failure cases | Figure 2 + discussion material |
+| 12 | Figures 4, 5, 6 (per-relation-type, KB ablation, correction method) | Bar charts |
+| 13 | Automated R-CHAIR (50-image sample, VLM triple verification) | Table 6 |
+| 14 | InstructBLIP multi-captioner (100-image subset) | Table 11 |
+| 15 | Architecture diagram | Figure 1 |
+
+**Key design decisions:**
+- Every expensive cell saves checkpoints to Google Drive (every 50 images), loads from cache on restart
+- All ablation variants (B2, B3, KB-obj, KB-geom, KB-dump) computed post-hoc from saved KB — no re-running detection
+- McNemar's test for statistical significance (B1 vs RelCheck)
+- R-CHAIR fully automated via VLM triple verification (no manual annotation)
+- InstructBLIP comparison uses same image subset for fair comparison
+
+**Bugs fixed this session:**
+1. Cell 8: `methods_to_eval` cache check was broken — checked `m in rpope_raw[img_id]` but keys are `"method|||question"` format. Never detected cached results, always re-ran everything. Fixed with proper key format check.
+2. Cell 8: Missing `.get()` safety for `entry["method"]` in aggregation loop — could crash on malformed JSON. Fixed to `entry.get("method")` with skip guard.
+3. Cell 14: InstructBLIP comparison computed BLIP-2 stats on all 600 images but InstructBLIP only runs on 100. Unfair comparison. Fixed to compute both on same `ib_sample` subset.
+4. Cell 13: R-CHAIR checkpoint too infrequent (every 20 → every 10 images).
+
+**Run instructions:**
+1. First: set `N_IMAGES = 50` in Cell 1 for validation run
+2. If validation passes: set `N_IMAGES = 600` for full run
+3. Estimated cost: ~$3.80 on Together.ai for 600 images
+
+**Key files:**
+
+| File | What |
+|------|------|
+| `RelCheck_600.ipynb` | Full 600-image notebook (16 cells) — run this for all evidence |
+| `RelCheck_Enriched_100.ipynb` | Previous 100-image enrichment notebook (Session 6) |
+
+---
+
 ## Previous Status (Session 5)
 
 ### Session 3 Recap
@@ -325,16 +379,15 @@ This directly measures caption quality because the LLM can ONLY use the caption.
 
 ---
 
-## Revised Plan — 11 Days Remaining (April 3 deadline)
+## Revised Plan — 9 Days Remaining (April 3 deadline)
 
 | Day | Task | Time Est |
 |-----|------|----------|
 | **Day 1 (Mar 21)** | ✅ Viability test v2 (GroundingDINO + Maverick) — PASSED | Done |
 | **Days 2-3 (Mar 22-23)** | ✅ Built enriched pipeline, first +5.8% R-POPE result on 100 images | Done |
-| **Day 4 (Mar 24)** | Analyze regressions, optimize, scale to 600 images | 6 hrs |
-| **Day 5 (Mar 25)** | Full 600-image run + all evaluation metrics | 6 hrs |
-| **Day 6 (Mar 26)** | Multi-model experiment (RelCheck on InternVL2 captions) | 4 hrs |
-| **Day 7 (Mar 27)** | Error analysis, qualitative examples, ablation tables | 4 hrs |
+| **Days 4-5 (Mar 24-25)** | ✅ Built RelCheck_600.ipynb (16 cells, all metrics + ablations + figures), fixed 4 bugs | Done |
+| **Day 6 (Mar 26)** | Run RelCheck_600.ipynb: N_IMAGES=50 validation, then N_IMAGES=600 full run | 6 hrs |
+| **Day 7 (Mar 27)** | Analyze results, fix any issues, re-run if needed | 4 hrs |
 | **Days 8-11 (Mar 28-31)** | Report writing (~45-50 pages) | 15 hrs |
 | **Day 12 (Apr 1-2)** | Code cleanup, polish, buffer | 4 hrs |
 
