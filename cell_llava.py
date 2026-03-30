@@ -1,5 +1,5 @@
 # ============================================================
-# Cell 3b -- Multi-Model Captioning (LLaVA-1.5 + MiniGPT-4)
+# Cell 3b -- Multi-Model Captioning (LLaVA-1.5 + Qwen3-VL-8B)
 # ============================================================
 # Generates detailed captions from multiple MLLMs for the same images.
 # Each model is loaded, used, then unloaded to fit T4 GPU memory.
@@ -10,9 +10,16 @@
 # BLIP-2 must be unloaded first to free GPU memory.
 
 import gc
+import base64
+from io import BytesIO
+
+def encode_b64(image):
+    """Encode PIL image to base64 JPEG string for API calls."""
+    buf = BytesIO()
+    image.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 LLAVA_CAPTIONS_PATH = f"{SAVE_DIR}/llava_captions.json"
-MINIGPT4_CAPTIONS_PATH = f"{SAVE_DIR}/minigpt4_captions.json"
 
 DESCRIBE_PROMPT = "Describe this image in detail. Include all objects, their spatial positions relative to each other, any actions or interactions taking place, and notable attributes like colors and sizes."
 
@@ -54,7 +61,6 @@ else:
     print(f"Captioning {len(todo)} images with LLaVA...")
 
     for idx, img_id in enumerate(todo):
-        # LLaVA expects: "USER: <image>\n{prompt}\nASSISTANT:"
         conversation = [
             {"role": "user", "content": [
                 {"type": "image"},
@@ -91,24 +97,22 @@ else:
 
 
 # ============================
-# MiniGPT-4 (via Together.ai — simpler than local loading)
+# Qwen3-VL-8B (via Together.ai — serverless)
 # ============================
-# MiniGPT-4 is hard to load locally (custom repo, old deps).
-# Instead, we use a comparable approach: generate captions via
-# a hallucination-prone VLM on Together.ai.
-# We use Llama-4-Scout (smaller, more hallucination-prone than Maverick)
-# as a proxy for a weaker, hallucination-prone captioner.
+# Second VLM captioner: Qwen3-VL-8B (8B, weaker than Maverick 17B MoE).
+# Generates detailed captions via Together.ai serverless API.
+# Smaller model = more hallucination-prone = better for demonstrating correction.
 
-SCOUT_CAPTIONS_PATH = f"{SAVE_DIR}/scout_captions.json"
-SCOUT_MODEL = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+SCOUT_CAPTIONS_PATH = f"{SAVE_DIR}/scout_captions.json"  # kept for checkpoint compat
+SCOUT_MODEL = "Qwen/Qwen3-VL-8B-Instruct"  # serverless on Together.ai
 
 scout_captions = load_checkpoint(SCOUT_CAPTIONS_PATH) or {}
 
 if len(scout_captions) >= len(images):
-    print(f"Scout captions: loaded {len(scout_captions)} from cache.")
+    print(f"Qwen3-VL-8B captions: loaded {len(scout_captions)} from cache.")
 else:
     todo = [img_id for img_id in images if img_id not in scout_captions]
-    print(f"Captioning {len(todo)} images with Llama-4-Scout (via Together.ai)...")
+    print(f"Captioning {len(todo)} images with Qwen3-VL-8B (via Together.ai)...")
 
     for idx, img_id in enumerate(todo):
         b64 = encode_b64(images[img_id])
@@ -128,12 +132,12 @@ else:
         time.sleep(0.3)
 
     save_checkpoint(scout_captions, SCOUT_CAPTIONS_PATH)
-    print(f"Scout captioning done: {len(scout_captions)} images.")
+    print(f"Qwen3-VL-8B captioning done: {len(scout_captions)} images.")
 
 
 # ── Summary ──
 print(f"\n=== Caption Summary ===")
-for name, caps in [("BLIP-2", captions), ("LLaVA-1.5", llava_captions), ("Llama-4-Scout", scout_captions)]:
+for name, caps in [("BLIP-2", captions), ("LLaVA-1.5", llava_captions), ("Qwen3-VL-8B", scout_captions)]:
     lengths = [len(c) for c in caps.values() if c]
     if lengths:
         print(f"  {name}: {len(caps)} captions, avg {np.mean(lengths):.0f} chars, avg {np.mean([len(c.split('.')) for c in caps.values() if c]):.1f} sentences")
