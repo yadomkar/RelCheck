@@ -1,5 +1,5 @@
 # Memory — CS298 / RelCheck
-**Last updated:** 2026-03-25 (Session 7)
+**Last updated:** 2026-03-30 (Session 8)
 
 ---
 
@@ -376,6 +376,77 @@ This directly measures caption quality because the LLM can ONLY use the caption.
 | **GroundingDINO** | IDEA-Research/grounding-dino-tiny | Colab GPU | Object detection for spatial geometry |
 | **Llama-4-Maverick** | meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8 | Together.ai API | VLM action/attribute verification |
 | **Llama-3.3-70B** | meta-llama/Llama-3.3-70B-Instruct-Turbo | Together.ai API | Triple extraction + correction |
+
+---
+
+## Status (as of 2026-03-30, Session 8)
+
+### Session 8: Architecture Overhaul — Regression Root Cause + v3 Pipeline
+
+**Critical finding from 20-image validation run:**
+- BLIP-2: 51% → 54.9% (+3.9%) ← enrichment works for short captions
+- LLaVA-1.5: 68.6% → 56.9% (-11.8%) ← REGRESSION
+- Qwen3-VL-8B: 76.5% → 60.8% (-15.7%) ← SEVERE REGRESSION
+
+**Root cause (confirmed by caption length box plot):**
+- BLIP-2: 10 words → 75 words (enrichment adding info: correct)
+- LLaVA: 90 words → 93 words (roughly same length but content replaced)
+- Qwen: 200 words → 122 words (COMPRESSION: we deleted 80 words of correct info)
+
+The ANALYSIS_PROMPT said "write a 3-5 sentence caption" — correct for BLIP-2's 10-word captions, catastrophic for Qwen's 200-word descriptions. We replaced rich accurate captions with KB-constrained rewrites that lost correct information.
+
+**Second problem:** Cross-model story is essential to paper (BLIP-2 +3.9% alone is too small to publish). But "just use a better captioner" objection applies if we can't show improvement on strong models.
+
+**Architecture discussion outcomes:**
+- KB dump beats RelCheck on R-POPE → R-CHAIR is the metric that distinguishes them
+- The novelty is: type-aware verification (geometry for spatial is deterministic, not a model) + framework
+- Multi-model story: show RelCheck works across captioners (not just BLIP-2)
+- Cross-captioner consensus is a novel free signal we weren't using
+
+**New architecture: RelCheck v3 (enrich_caption_v3)**
+
+Plug-and-play: auto-detects mode from caption word count (no captioner name needed).
+
+SHORT captions (< 30 words, e.g. BLIP-2): **ENRICHMENT mode** (unchanged from v2)
+- Fix errors + add missing KB facts via full KB-guided rewrite
+
+LONG captions (>= 30 words, e.g. LLaVA, Qwen): **CORRECTION mode** (new)
+1. Extract triples via Llama-3.3-70B
+2. Cross-captioner consensus filter: skip VQA for entities confirmed by another captioner
+3. Crop-based contrastive TRUE/FALSE VQA via Maverick (focused region, not full image)
+4. Surgical span editing: only replace hallucinated phrase, preserve all other text
+
+**Key design properties:**
+- Corrected LLaVA/Qwen captions are never shorter than originals (surgical edit only)
+- Consensus filter reduces false positives (free signal from running multiple captioners)
+- Crop VQA is more reliable than full-image VQA (less noise, focused on subject+object)
+
+**Training track (parallel):**
+- RelCheck_Train_Verifier.ipynb: LoRA fine-tune LLaVA-1.5-7B on VSR dataset
+- VSR = Visual Spatial Reasoning (HuggingFace: juletxara/visual-spatial-reasoning)
+- 10k+ True/False spatial relation pairs, purpose-built for this task
+- Expected: ~85-90% accuracy vs ~70% zero-shot → fewer false positives
+- Training time: ~2-3 hours on Colab A100
+
+**Key files (Session 8):**
+
+| File | What |
+|------|------|
+| `RelCheck_600.ipynb` | Cells 7+8 updated with v3 pipeline |
+| `RelCheck_Train_Verifier.ipynb` | NEW: LoRA fine-tune spatial verifier on VSR |
+
+**Deadline extended:** April 3 → April 8, 2026
+
+**Remaining plan (9 days):**
+
+| Day | Task |
+|-----|------|
+| Mar 30 (today) | ✅ Implemented v3 pipeline (consensus + crop + surgical edit) |
+| Mar 31 | Run 20-image validation. If LLaVA/Qwen no longer regress → proceed. Kick off VSR training overnight |
+| Apr 1 | Evaluate trained verifier. Integrate if good. Run 50-image validation |
+| Apr 2 | Full 600-image run with best pipeline |
+| Apr 3-4 | Analyze results, fix issues, re-run if needed |
+| Apr 5-8 | Report writing (~45-50 pages) |
 
 ---
 
