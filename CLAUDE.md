@@ -1,5 +1,5 @@
 # Memory — CS298 / RelCheck
-**Last updated:** 2026-03-30 (Session 8)
+**Last updated:** 2026-04-02 (Session 9)
 
 ---
 
@@ -491,3 +491,144 @@ With 3 paraphrases averaged, yes_ratios should be less noisy. The [0.50, 0.65) u
 - Keep laptop awake during runs: `caffeinate -i` in Terminal
 - Don't waste time on long re-runs without knowing evaluation works first
 - **Focus on getting a solid project first, report can come later** (stated Session 2)
+
+---
+
+## Status (as of 2026-04-02, Session 9)
+
+### Session 9: VG Recall Test + Architecture Audit
+
+**Goal:** Build `RelCheck_VG_Recall.ipynb` to measure whether RelCheck's verifier pipeline correctly **detects** relational hallucinations (ground truth from Visual Genome).
+
+**Key findings:**
+1. **VG recall notebook works** — has all Session 5-8 features (GroundingDINO + crop VQA + contrastive) inline in Cell 1
+2. **relcheck/ modules are outdated** — stuck at Session 2-3 code (OWL-ViT + BLIP-2, no contrastive, no KB, no synonyms)
+3. **Entity matching is hard** — 88.6% of triples drop at entity matching (caption "man" vs VG "person") despite synonym map + substring matching
+4. **Hallucination detection works** — co-occurrence trap table (42 relations) found 2 real hallucinations on LLaVA captions
+
+**Architecture audit results:**
+
+| Feature | relcheck/ modules | Notebook code | Status |
+|---------|-------------------|---------------|--------|
+| GroundingDINO | ✗ (uses OWL-ViT) | ✓ | Notebooks ahead |
+| Contrastive VQA | ✗ | ✓ | Notebooks ahead |
+| Crop-based VQA | ✗ | ✓ | Notebooks ahead |
+| Maverick VLM | ✗ (uses BLIP-2) | ✓ | Notebooks ahead |
+| Synonym entity matching | ✗ | ✓ | Notebooks ahead |
+| Knowledge Base (KB) | ✗ | ✓ (v2-3 enrichment) | Notebooks ahead |
+| Co-occurrence traps | ✗ | ✓ (VG notebook only) | New in VG |
+
+**Decision:** Keep notebook code as source of truth. relcheck/ modules will be refactored later (post-deadline).
+
+**VG test results (50 LLaVA images):**
+
+```
+── Funnel stats ──────────────────────────────
+  Caption triples extracted   : 352
+  No VG entity match (dropped): 312 (88.6%)
+  Had VG match → COMPATIBLE   : 38
+  Had VG match → CONTRADICTORY: 2 ← hallucinations found
+  GT hallucinations kept      : 2
+──────────────────────────────────────────────
+```
+
+**Hallucinations detected:**
+1. `(man, wearing, hat)` — VG says "holding" → Real hallucination ✓
+2. `(person, standing near, man on motorcycle)` — VG says "sitting on" → Real hallucination ✓
+
+**Problem identified:** Entity matching dropout (88.6%) means we need N_IMAGES=200-500 to get statistically significant hallucination counts for Cell 5 (recall measurement). Current 2 hallucinations across 50 images is too small.
+
+**Next steps:**
+- Increase N_IMAGES to 200-500 for VG test (expect 8-15 hallucinations)
+- Or switch captioner (Qwen has longer captions → more relational claims → more hallucinations)
+- Run Cell 5 on meaningful hallucination set to measure RelCheck detection recall
+
+---
+
+## Architecture for Ground-Up Rebuild (Post-Deadline)
+
+If building the entire system from scratch, here's what to include:
+
+### Stage 1: Triple Extraction
+- **Input:** Caption (any length)
+- **Model:** Llama-3.3-70B via Together.ai
+- **Output:** List[{subject, relation, object, type}]
+- **Type classification:** SPATIAL / ACTION / ATTRIBUTE (via relation keywords)
+
+### Stage 2: Relation Verification (Type-Aware Routing)
+**Input:** Image + triple + type
+**Output:** verdict (True/False/None) + confidence
+
+#### Path A: SPATIAL relations
+1. Run GroundingDINO on {subject, object} entities → bboxes
+2. Apply deterministic geometry rules (centroid + overlap analysis) → verdict
+3. If geometry ambiguous (dead zone ±0.08) → fall through
+
+#### Path B: ACTION/ATTRIBUTE relations
+1. Detect {subject, object} via GroundingDINO → bboxes
+2. Crop image to entity regions (15% padding)
+3. Run 2 standard yes/no questions via Maverick VLM
+4. Run 1 contrastive forced-choice (counterfactual alternatives, A/B randomized)
+5. Average yes_ratios from 3 questions → verdict
+
+#### Path C: Fallback (any type, no detections)
+- Full-image yes/no VQA via Maverick
+
+**Key properties:**
+- Deterministic spatial verification (no hallucination risk from geometry)
+- Crop-based VQA reduces noise vs full-image (focused region)
+- Contrastive forced-choice removes position bias (A/B randomization)
+- Maverick >> BLIP-2 for action understanding
+
+### Stage 3: Hallucination Correction
+**Input:** Caption + list of hallucinated triples
+**Output:** Corrected caption (minimal edits)
+
+#### SHORT captions (<30 words, e.g., BLIP-2)
+- **ENRICHMENT mode:**
+  1. Build Visual KB via GroundingDINO + Maverick descriptions
+  2. Llama analyzes: identify errors in caption + missing KB facts
+  3. Generate improved caption (3-5 sentences)
+  4. Verify against KB (faithfulness + fluency + coherence checks)
+  5. Keep if verified; revert if KB contradiction
+
+#### LONG captions (≥30 words, e.g., LLaVA, Qwen)
+- **CORRECTION mode:**
+  1. Extract triples from caption
+  2. Run verifier on each → mark hallucinated
+  3. Llama edits **only** hallucinated spans (surgical, preserve other text)
+  4. Verify corrected caption maintains fluency (BLEU-4 gate)
+  5. Never shorten caption (surgical edit only)
+
+### Stage 4: Entity Matching (Critical for VG evaluation)
+**Current bottleneck:** 88.6% dropout at entity matching
+
+**Improvements to implement:**
+1. **Synonym normalization:** {man, woman, boy, girl, person} → person; {bike, bicycle, cycle} → bicycle; etc. (22+ mappings)
+2. **Substring matching:** "cake" matches "slice of chocolate cake" via containment
+3. **Fuzzy matching (optional):** Levenshtein distance for typos (cat/cats, bike/biking)
+4. **Relation normalization:** "placed on" → "on", "located near" → "near", "adorn" → "on", etc.
+5. **Co-occurrence traps (VG recall):** 42-relation TRAP_TABLE encoding known hallucination patterns
+
+**For publication-ready system:** Add entity linker (CLIP embeddings or DINO-based) to match caption entities to detected objects more robustly.
+
+### Key Files to Maintain
+- `RelCheck_VG_Recall.ipynb` — VG recall test (detection only)
+- `RelCheck_600.ipynb` — Full end-to-end pipeline (detection + correction + evaluation)
+- `relcheck/` modules (after refactor):
+  - `triple_extractor.py` → Stage 1
+  - `relation_verifier.py` → Stage 2 (refactor: add GroundingDINO + crop VQA + contrastive)
+  - `corrector.py` → Stage 3 (refactor: add KB + surgical editing)
+  - `entity_matcher.py` → Stage 4 (new: synonym map + relation normalization)
+
+### Models Used (Session 9)
+| Model | ID | Purpose |
+|-------|----|---------|
+| **BLIP-2** | Salesforce/blip2-flan-t5-xl | Captioning (short, for BLIP-2 input) |
+| **LLaVA-1.5-7B** | llava-hf/llava-1.5-7b-hf | Local captioning test (loaded on Colab GPU) |
+| **Qwen3-VL-8B** | Qwen/Qwen3-VL-8B-Instruct | Captioning (long, stronger baseline) |
+| **GroundingDINO** | IDEA-Research/grounding-dino-tiny | Object detection for spatial + entity matching |
+| **Maverick VLM** | meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8 | Action/attribute verification via Together.ai |
+| **Llama-3.3-70B** | meta-llama/Llama-3.3-70B-Instruct-Turbo | Triple extraction + correction via Together.ai |
+
+---
