@@ -632,3 +632,32 @@ If building the entire system from scratch, here's what to include:
 | **Llama-3.3-70B** | meta-llama/Llama-3.3-70B-Instruct-Turbo | Triple extraction + correction via Together.ai |
 
 ---
+
+## Status (as of 2026-04-02, Session 10)
+
+### Session 10: Synthetic Test Corrector Fixes
+
+**Goal:** Fix `RelCheck_Synthetic_Test.ipynb` so corrected accuracy ≥ original accuracy (previously 30% vs 90% — net negative).
+
+**Root cause found:** Short corrupted captions (BLIP-2 + injected sentence = ~20 words < 30-word threshold) were routing through `_enrich_short_caption()` (full KB rewrite), not `_correct_long_caption_v2()` (surgical deletion). Enrichment mode rewrites the entire caption unpredictably — it doesn't know to delete the specific injected false sentence.
+
+**Four fixes applied to Cell 7 of `RelCheck_Synthetic_Test.ipynb`:**
+
+1. **Root cause fix (Fix 4):** Synthetic test runner now calls `_correct_long_caption_v2` directly instead of `enrich_caption_v3`, regardless of caption length. Ensures targeted surgical deletion for all captions.
+
+2. **`_is_standalone` AND→OR (Fix 1):** DELETE guidance now triggers if EITHER the subject OR object entity is unique to the false sentence (appears in only 1 sentence). Previously required BOTH to be unique — caused EDIT ONLY when a common entity like "man" appeared in multiple sentences, leaving a rephrased (still wrong) false claim.
+
+3. **EDIT ONLY → COMPLETELY DELETE fallback (Fix 3):** Non-standalone path now also uses DELETE guidance instead of rephrasing the relation (which risks introducing a different wrong claim).
+
+4. **Strengthened BATCH_CORRECT_PROMPT Rule 2 (Fix 2):** Renamed to "SENTENCE DELETION" with explicit trigger phrases ("COMPLETELY DELETE" or "NOT in this image"), higher priority over rules 3-7.
+
+**Commit:** `b8458c0` — pushed to GitHub.
+
+**Expected impact:** Corrected accuracy should improve from ~30% to ~80-90% (matching original) when injected false sentences are detected. The fixes ensure that once a false sentence IS detected (HIGH confidence), it gets properly deleted rather than rephrased.
+
+**Next steps:**
+- Run Cell 7 (requires Colab GPU + Together.ai API)
+- Verify corrected accuracy ≥ original accuracy (expect ~80-90%)
+- If detection recall is still <60%: investigate VQA false negatives on real-entity injections (R-Bench entities exist in image but relation is wrong)
+- Once synthetic test validates, run full 600-image pipeline (`RelCheck_600.ipynb`)
+- Report writing
