@@ -44,7 +44,7 @@
 | **BLIP-2** | Vision-language model used for captioning (blip2-flan-t5-xl) |
 | **LLaVA-1.5-7B** | Legacy cross-model verifier — replaced by Llama-4-Maverick in Session 5 (too weak, 9-11/20 false positives) |
 | **GroundingDINO** | IDEA-Research/grounding-dino-tiny — zero-shot object detector for spatial geometry verification (replaces OWLv2 in Session 5) |
-| **Llama-4-Maverick** | meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8 — VLM for action/attribute verification via Together.ai (replaces LLaVA-1.5-7B in Session 5) |
+| **Llama-4-Maverick** | ~~meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8~~ — **no longer available on Together.ai**. Replaced by `Qwen/Qwen3-VL-8B-Instruct` in all notebooks. |
 | **OWLv2** | google/owlv2-base-patch16-ensemble — legacy detector, replaced by GroundingDINO in Session 5 |
 | **OWL-ViT** | google/owlvit-base-patch32 — legacy detector, replaced by OWLv2 in Session 2 |
 | **Pix2Grp** | CVPR 2024 SGG model — attempted in Session 4, failed viability test |
