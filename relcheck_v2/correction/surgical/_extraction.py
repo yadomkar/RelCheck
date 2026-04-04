@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import json_repair
 
-from .._logging import log
-from ..api import llm_call
-from ..prompts import TRIPLE_EXTRACT_PROMPT
-from ..types import Triple, RelationType
+from ..._logging import log
+from ...api import llm_call
+from ...prompts import TRIPLE_EXTRACT_PROMPT
+from ...types import Triple, RelationType
 
 
 _SPATIAL_WORDS: frozenset[str] = frozenset({

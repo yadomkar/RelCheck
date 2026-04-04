@@ -15,23 +15,25 @@ from __future__ import annotations
 
 from PIL import Image
 
-from .._logging import log
-from ..config import SPATIAL_OPPOSITES
-from ..entity import levenshtein_distance
-from ..types import (
+from ..._logging import log
+from ...config import SPATIAL_OPPOSITES
+from ...entity import levenshtein_distance
+from ...types import (
     CorrectionMode, CorrectionResult, CorrectionError,
     VerificationResult, RelationType, Verdict, Confidence,
 )
 from ._addendum import build_spatial_addendum, add_missing_fact_addendum
 from ._application import apply_batch_correction
 from ._extraction import extract_triples
-from ._utils import entity_matches
+from .._utils import entity_matches
 from ._verify import (
     check_spatial_contradictions,
     verify_spatial_triple,
     verify_action_attribute_triple,
 )
-from ._vqa import _parse_spatial_facts
+from .._vqa import _parse_spatial_facts
+
+__all__ = ["correct_long_caption"]
 
 
 def correct_long_caption(

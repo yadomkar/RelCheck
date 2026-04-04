@@ -7,8 +7,8 @@ and for resolving entity names between KB and caption text.
 
 from __future__ import annotations
 
-from ..config import ENTITY_SYNONYMS
-from ._utils import core_noun
+from ...config import ENTITY_SYNONYMS
+from .._utils import core_noun
 
 
 # ── Cross-captioner consensus ───────────────────────────────────────────

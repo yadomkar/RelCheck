@@ -11,12 +11,12 @@ from collections import Counter
 
 from nltk.util import ngrams
 
-from .._logging import log
-from ..api import llm_call
-from ..config import ADDENDUM_MAX_WORDS_ADDED, ADDENDUM_SURVIVAL_RATIO
-from ..prompts import MISSING_FACTS_PROMPT
+from ..._logging import log
+from ...api import llm_call
+from ...config import ADDENDUM_MAX_WORDS_ADDED, ADDENDUM_SURVIVAL_RATIO
+from ...prompts import MISSING_FACTS_PROMPT
+from .._vqa import _parse_spatial_facts
 from ._consensus import caption_name_for, relation_already_expressed
-from ._vqa import _parse_spatial_facts
 
 
 def build_spatial_addendum(

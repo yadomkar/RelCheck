@@ -23,7 +23,7 @@ from .._logging import log
 from ..config import SHORT_CAPTION_THRESHOLD
 from ..types import CorrectionResult
 from ._enrichment import enrich_short_caption
-from ._surgical import correct_long_caption
+from .surgical import correct_long_caption
 
 if TYPE_CHECKING:
     from PIL import Image

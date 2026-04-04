@@ -11,24 +11,24 @@ from __future__ import annotations
 
 from PIL import Image
 
-from .._logging import log
-from ..config import SPATIAL_OPPOSITES
-from ..detection import find_best_bbox_from_kb
-from ..spatial import SPATIAL_TRIPLE_RE
-from ..types import (
+from ..._logging import log
+from ...config import SPATIAL_OPPOSITES
+from ...detection import find_best_bbox_from_kb
+from ...spatial import SPATIAL_TRIPLE_RE
+from ...types import (
     CorrectionError, VerificationResult,
     Triple, RelationType, Verdict, Confidence,
 )
-from ._consensus import spatial_synonyms
-from ._geometry import (
+from .._geometry import (
     ACTION_GEOMETRY_TAXONOMY, classify_action_family,
     get_person_keypoints, check_action_geometry,
 )
-from ._utils import core_noun, entity_matches, normalize_entity
-from ._vqa import (
+from .._utils import core_noun, entity_matches, normalize_entity
+from .._vqa import (
     check_entity_exists_vqa, verify_action_triple,
     query_correct_spatial_relation, _parse_spatial_facts,
 )
+from ._consensus import spatial_synonyms
 
 
 # ── Person-like entity words (for keypoint routing) ────────────────────

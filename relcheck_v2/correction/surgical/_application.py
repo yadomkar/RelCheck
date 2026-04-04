@@ -12,14 +12,14 @@ import re
 import pysbd
 from PIL import Image
 
-from .._logging import log
-from ..api import llm_call
-from ..config import CORRECTION_LENGTH_RATIO_MIN, CORRECTION_LENGTH_RATIO_MAX
-from ..detection import find_best_bbox_from_kb
-from ..prompts import TRIPLE_CORRECT_PROMPT, BATCH_CORRECT_PROMPT
-from ..types import CorrectionError, Confidence
-from ._utils import core_noun, has_garble, extract_correct_rel_from_reason
-from ._vqa import (
+from ..._logging import log
+from ...api import llm_call
+from ...config import CORRECTION_LENGTH_RATIO_MIN, CORRECTION_LENGTH_RATIO_MAX
+from ...detection import find_best_bbox_from_kb
+from ...prompts import TRIPLE_CORRECT_PROMPT, BATCH_CORRECT_PROMPT
+from ...types import CorrectionError, Confidence
+from .._utils import core_noun, has_garble, extract_correct_rel_from_reason
+from .._vqa import (
     check_entity_exists_vqa,
     query_correct_spatial_relation,
     query_correct_action_relation,
