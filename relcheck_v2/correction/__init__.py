@@ -23,6 +23,7 @@ from .._logging import log
 from ..config import SHORT_CAPTION_THRESHOLD
 from ..types import CorrectionResult
 from ._enrichment import enrich_short_caption
+from ._metrics import STAGE_INPUT, MetricsCollector
 from .surgical import correct_long_caption
 
 if TYPE_CHECKING:
@@ -42,6 +43,7 @@ def enrich_caption_v3(
     pil_image: "Image.Image | None" = None,
     cross_captions: dict[str, str] | None = None,
     include_addendum: bool = True,
+    metrics: MetricsCollector | None = None,
 ) -> CorrectionResult:
     """Auto-dispatch correction based on caption word count.
 
@@ -60,26 +62,36 @@ def enrich_caption_v3(
             models, used for consensus pre-filtering in long captions.
         include_addendum: If False, skip appending missing KB facts after
             correction (long captions only). Use for correction-only ablation.
+        metrics: Optional metrics collector for path logging.
 
     Returns:
         CorrectionResult with corrected/enriched caption and metadata.
     """
     word_count = len(caption.split())
 
+    if metrics is not None:
+        metrics.init_image(img_id)
+        metrics.record_caption_snapshot(img_id, STAGE_INPUT, caption)
+
     if word_count < SHORT_CAPTION_THRESHOLD:
         log.info(
             "[%s] Short caption (%d words < %d) → enrichment mode",
             img_id, word_count, SHORT_CAPTION_THRESHOLD,
         )
-        return enrich_short_caption(img_id, caption, kb)
+        if metrics is not None:
+            metrics.record_dispatch(img_id, word_count, SHORT_CAPTION_THRESHOLD, "enrichment")
+        return enrich_short_caption(img_id, caption, kb, metrics=metrics)
 
     log.info(
         "[%s] Long caption (%d words >= %d) → surgical correction mode",
         img_id, word_count, SHORT_CAPTION_THRESHOLD,
     )
+    if metrics is not None:
+        metrics.record_dispatch(img_id, word_count, SHORT_CAPTION_THRESHOLD, "surgical")
     return correct_long_caption(
         img_id, caption, kb,
         pil_image=pil_image,
         cross_captions=cross_captions,
         include_addendum=include_addendum,
+        metrics=metrics,
     )

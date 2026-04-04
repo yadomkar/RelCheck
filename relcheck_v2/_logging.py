@@ -28,3 +28,4 @@ if not log.handlers:
     ))
     log.addHandler(_handler)
     log.setLevel(logging.INFO)
+    log.propagate = False  # Prevent duplicate output in Colab (root logger also has a handler)

@@ -18,6 +18,13 @@ from ...config import CORRECTION_LENGTH_RATIO_MIN, CORRECTION_LENGTH_RATIO_MAX
 from ...detection import find_best_bbox_from_kb
 from ...prompts import TRIPLE_CORRECT_PROMPT, BATCH_CORRECT_PROMPT
 from ...types import CorrectionError, Confidence
+from .._metrics import (
+    GUIDANCE_DELETE_SENTENCE, GUIDANCE_REPLACE_WORD, GUIDANCE_SOFTEN,
+    SOURCE_ACTION_3STAGE, SOURCE_KB_VISUAL_DESC,
+    SOURCE_SPATIAL_KB, SOURCE_VLM_QUERY,
+    STAGE_BATCH_CANDIDATE, STAGE_FALLBACK_DELETION,
+    MetricsCollector,
+)
 from .._utils import core_noun, has_garble, extract_correct_rel_from_reason
 from .._vqa import (
     check_entity_exists_vqa,
@@ -114,6 +121,7 @@ def apply_batch_correction(
     errors: list[CorrectionError],
     kb: dict,
     pil_image: Image.Image,
+    metrics: MetricsCollector | None = None,
 ) -> tuple[str, list[dict]]:
     """Build correction guidance and apply batch LLM correction.
 
@@ -123,6 +131,7 @@ def apply_batch_correction(
         errors: List of confirmed errors.
         kb: Visual KB dict.
         pil_image: Full PIL image.
+        metrics: Optional metrics collector for path logging.
 
     Returns:
         Tuple of (corrected_caption, applied_methods).
@@ -141,6 +150,7 @@ def apply_batch_correction(
         guidance = build_correction_guidance(
             subj, rel, obj_, reason, err_type, err.confidence,
             caption, kb, pil_image,
+            img_id=img_id, metrics=metrics,
         )
         err.guidance = guidance
         error_lines.append(f'{i}. "{subj} {rel} {obj_}" — {guidance}')
@@ -164,11 +174,28 @@ def apply_batch_correction(
         too_compressed = is_long_caption and ratio < CORRECTION_LENGTH_RATIO_MIN
         garble = has_garble(candidate)
 
-        if (ratio <= CORRECTION_LENGTH_RATIO_MAX
-                and candidate != caption
-                and not garble
-                and not is_too_short
-                and not too_compressed):
+        accepted = (
+            ratio <= CORRECTION_LENGTH_RATIO_MAX
+            and candidate != caption
+            and not garble
+            and not is_too_short
+            and not too_compressed
+        )
+
+        if metrics is not None:
+            metrics.record_batch_eval(
+                img_id,
+                length_ratio=round(ratio, 4),
+                garble_detected=bool(garble),
+                too_short=is_too_short,
+                too_compressed=too_compressed,
+                accepted=accepted,
+            )
+            metrics.record_caption_snapshot(
+                img_id, STAGE_BATCH_CANDIDATE, candidate, accepted=accepted,
+            )
+
+        if accepted:
             corrected = candidate
             applied = [{"method": "batch_llm", "n_errors": len(errors),
                         "errors": [e.triple.claim for e in errors]}]
@@ -182,6 +209,18 @@ def apply_batch_correction(
                 corrected, fallback_applied = _fallback_deletion(corrected, high_errors)
                 if fallback_applied:
                     applied.append({"method": "fallback_deletion", "n_errors": len(high_errors)})
+                    if metrics is not None:
+                        n_deleted = len(high_errors)
+                        metrics.record_fallback_deletion(img_id, used=True, n_deleted=n_deleted)
+                        metrics.record_caption_snapshot(
+                            img_id, STAGE_FALLBACK_DELETION, corrected,
+                        )
+                else:
+                    if metrics is not None:
+                        metrics.record_fallback_deletion(img_id, used=False, n_deleted=0)
+            else:
+                if metrics is not None:
+                    metrics.record_fallback_deletion(img_id, used=False, n_deleted=0)
 
     return corrected, applied
 
@@ -240,6 +279,8 @@ def build_correction_guidance(
     caption: str,
     kb: dict,
     pil_image: Image.Image,
+    img_id: str = "",
+    metrics: MetricsCollector | None = None,
 ) -> str:
     """Build correction guidance string for one error.
 
@@ -256,42 +297,56 @@ def build_correction_guidance(
         caption: Original caption text.
         kb: Visual KB dict.
         pil_image: Full PIL image.
+        img_id: Image identifier (for metrics recording).
+        metrics: Optional metrics collector for path logging.
 
     Returns:
         Guidance instruction string for the LLM corrector.
     """
     claim_str = f"{subj} {rel} {obj_}"
 
+    # Track guidance metadata for metrics
+    guidance_type: str = GUIDANCE_SOFTEN
+    correct_rel_found = False
+    correct_rel_source: str | None = None
+
     if err_type == "SPATIAL" and "absence" in reason:
         m = re.search(r"object '([^']+)' absent", reason)
         absent = m.group(1) if m else subj
-        return (
+        guidance_type = GUIDANCE_DELETE_SENTENCE
+        guidance_text = (
             f"'{absent}' does NOT exist in this image. "
             f"Find the sentence that expresses '{claim_str}' and COMPLETELY "
             f"DELETE that one sentence. Do not touch any other sentence. "
             f"Do NOT rephrase or keep any version of the deleted sentence."
         )
-
-    if err_type == "SPATIAL":
+    elif err_type == "SPATIAL":
         correct_rel = extract_correct_rel_from_reason(reason)
+        if correct_rel:
+            correct_rel_source = SOURCE_SPATIAL_KB
         if not correct_rel and pil_image is not None:
             correct_rel = query_correct_spatial_relation(subj, obj_, kb, pil_image)
+            if correct_rel:
+                correct_rel_source = SOURCE_VLM_QUERY
         if correct_rel and correct_rel.strip() != rel.strip():
-            return (
+            guidance_type = GUIDANCE_REPLACE_WORD
+            correct_rel_found = True
+            guidance_text = (
                 f"The spatial relation '{rel}' in '{claim_str}' is WRONG "
                 f"(deterministic bbox geometry). "
                 f"Replace ONLY the word/phrase '{rel}' with '{correct_rel}'. "
                 f"Keep '{subj}' and '{obj_}' and all other text unchanged."
             )
-        return (
-            f"The spatial claim '{claim_str}' is definitively WRONG "
-            f"(bbox geometry contradicts it) and the correct relation is "
-            f"unclear. COMPLETELY DELETE the sentence containing "
-            f"'{claim_str}'. Do not touch any other sentence."
-        )
-
-    # ACTION/ATTRIBUTE
-    if confidence in (Confidence.HIGH, Confidence.MEDIUM):
+        else:
+            guidance_type = GUIDANCE_DELETE_SENTENCE
+            guidance_text = (
+                f"The spatial claim '{claim_str}' is definitively WRONG "
+                f"(bbox geometry contradicts it) and the correct relation is "
+                f"unclear. COMPLETELY DELETE the sentence containing "
+                f"'{claim_str}'. Do not touch any other sentence."
+            )
+    elif confidence in (Confidence.HIGH, Confidence.MEDIUM):
+        # ACTION/ATTRIBUTE with high/medium confidence
         obj_box_exists = find_best_bbox_from_kb(obj_, kb) is not None
         if not obj_box_exists and pil_image is not None:
             obj_exists_vqa = check_entity_exists_vqa(obj_, pil_image)
@@ -300,47 +355,67 @@ def build_correction_guidance(
         obj_absent = not obj_box_exists and obj_exists_vqa is False
 
         if obj_absent:
-            return (
+            guidance_type = GUIDANCE_DELETE_SENTENCE
+            guidance_text = (
                 f"'{obj_}' does NOT exist in this image. "
                 f"Find the sentence that expresses '{claim_str}' and COMPLETELY "
                 f"DELETE that one sentence. Do not touch any other sentence. "
                 f"Do NOT rephrase or keep any version of the deleted sentence."
             )
+        else:
+            correct_rel = query_correct_action_relation(subj, rel, obj_, kb, pil_image)
+            if correct_rel:
+                guidance_type = GUIDANCE_REPLACE_WORD
+                correct_rel_found = True
+                correct_rel_source = SOURCE_ACTION_3STAGE
+                guidance_text = (
+                    f"The relation '{rel}' in '{claim_str}' is DEFINITELY "
+                    f"WRONG (VQA HIGH confidence). "
+                    f"Replace ONLY the word/phrase '{rel}' with '{correct_rel}'. "
+                    f"Keep '{subj}' and '{obj_}' and all other text unchanged. "
+                    f"Do NOT add or remove any other words."
+                )
+            else:
+                # Check standalone-ness
+                sentences = _SEGMENTER.segment(caption)
+                cn_s = core_noun(subj)
+                cn_o = core_noun(obj_)
+                s_in_sentences = sum(1 for s in sentences if cn_s in s.lower())
+                o_in_sentences = sum(1 for s in sentences if cn_o in s.lower())
+                is_standalone = s_in_sentences <= 1 or o_in_sentences <= 1
 
-        correct_rel = query_correct_action_relation(subj, rel, obj_, kb, pil_image)
-        if correct_rel:
-            return (
-                f"The relation '{rel}' in '{claim_str}' is DEFINITELY "
-                f"WRONG (VQA HIGH confidence). "
-                f"Replace ONLY the word/phrase '{rel}' with '{correct_rel}'. "
-                f"Keep '{subj}' and '{obj_}' and all other text unchanged. "
-                f"Do NOT add or remove any other words."
-            )
-
-        # Check standalone-ness
-        sentences = _SEGMENTER.segment(caption)
-        cn_s = core_noun(subj)
-        cn_o = core_noun(obj_)
-        s_in_sentences = sum(1 for s in sentences if cn_s in s.lower())
-        o_in_sentences = sum(1 for s in sentences if cn_o in s.lower())
-        is_standalone = s_in_sentences <= 1 or o_in_sentences <= 1
-
-        if is_standalone:
-            return (
-                f"The claim '{claim_str}' is DEFINITELY WRONG. "
-                f"COMPLETELY DELETE the sentence containing "
-                f"'{claim_str}'. Do not touch any other sentence."
-            )
-        return (
-            f"The relation '{rel}' in '{claim_str}' is DEFINITELY "
-            f"WRONG (VQA HIGH confidence) but the correct relation "
-            f"is unclear. Replace ONLY '{rel}' with 'near' to remove "
-            f"the false claim while keeping '{subj}' and '{obj_}'."
+                if is_standalone:
+                    guidance_type = GUIDANCE_DELETE_SENTENCE
+                    guidance_text = (
+                        f"The claim '{claim_str}' is DEFINITELY WRONG. "
+                        f"COMPLETELY DELETE the sentence containing "
+                        f"'{claim_str}'. Do not touch any other sentence."
+                    )
+                else:
+                    guidance_type = GUIDANCE_REPLACE_WORD
+                    correct_rel_found = True
+                    correct_rel_source = None  # fallback to "near"
+                    guidance_text = (
+                        f"The relation '{rel}' in '{claim_str}' is DEFINITELY "
+                        f"WRONG (VQA HIGH confidence) but the correct relation "
+                        f"is unclear. Replace ONLY '{rel}' with 'near' to remove "
+                        f"the false claim while keeping '{subj}' and '{obj_}'."
+                    )
+    else:
+        guidance_type = GUIDANCE_SOFTEN
+        guidance_text = (
+            f"The '{rel}' relationship between '{subj}' and '{obj_}' appears "
+            f"incorrect (VQA confidence MEDIUM — {reason}). "
+            f"Soften or correct only the '{rel}' word — keep both '{subj}' "
+            f"and '{obj_}' in the sentence."
         )
 
-    return (
-        f"The '{rel}' relationship between '{subj}' and '{obj_}' appears "
-        f"incorrect (VQA confidence MEDIUM — {reason}). "
-        f"Soften or correct only the '{rel}' word — keep both '{subj}' "
-        f"and '{obj_}' in the sentence."
-    )
+    if metrics is not None:
+        metrics.record_guidance(img_id, {
+            "claim": claim_str,
+            "guidance_type": guidance_type,
+            "correct_rel_found": correct_rel_found,
+            "correct_rel_source": correct_rel_source,
+        })
+
+    return guidance_text
