@@ -1,5 +1,5 @@
 # Memory — CS298 / RelCheck
-**Last updated:** 2026-04-02 (Session 9)
+**Last updated:** 2026-04-04 (Session 11)
 
 ---
 
@@ -661,3 +661,64 @@ If building the entire system from scratch, here's what to include:
 - If detection recall is still <60%: investigate VQA false negatives on real-entity injections (R-Bench entities exist in image but relation is wrong)
 - Once synthetic test validates, run full 600-image pipeline (`RelCheck_600.ipynb`)
 - Report writing
+
+---
+
+## Status (as of 2026-04-04, Session 11)
+
+### Session 11: Confidence Gate Fix + KB-First Relation Selection
+
+**Problem identified in Session 10 synthetic test:**
+- Detection: 75% (15/20 hallucinations found correctly)
+- Correction: Only 35% (7/20 captions corrected)
+- R-POPE accuracy: 20% (vs. target ≥50%)
+
+**Root cause:** Verdicts marked INCORRECT but with MEDIUM confidence (not HIGH). Only HIGH-confidence errors triggered corrections. Gap between detection (75%) and correction (35%).
+
+**Solution: Two-part fix**
+
+#### Part 1: Accept MEDIUM Confidence (4 changes to Cell 7)
+Changed lines ~1763, ~1858, ~1948, ~2151 from:
+```python
+if err.get("confidence") == "HIGH":
+```
+to:
+```python
+if err.get("confidence") in ("HIGH", "MEDIUM"):
+```
+
+**Why:** VQA voting 3-to-0 NO on a relation is strong evidence (MEDIUM confidence justified). Synthetic test hallucinations are unambiguous, so MEDIUM is safe.
+
+**Expected impact:** Correction rate 35% → 60–70%
+
+#### Part 2: KB-First + Constrained Selection + Verify (2 function rewrites)
+
+**_query_correct_action_relation** (3-stage approach):
+1. **Stage 1 — KB Lookup (free):** Check `spatial_facts` and `visual_description` for existing entity pair relations. If found, use directly (no VLM).
+2. **Stage 2 — Constrained Selection:** Generate 6 candidate relations, ask VLM forced-choice (A–F), not open-ended. More reliable than open generation.
+3. **Stage 3 — Verify:** Ask yes/no confirmation. If rejected, fallback to "near" or delete.
+
+**_query_correct_spatial_relation** (2-stage):
+1. **Stage 1 — KB Lookup:** Check spatial_facts for deterministic geometry answer.
+2. **Stage 2 — VLM + Verify:** If no KB match, ask VLM + confirm with yes/no.
+
+**Why better:**
+- KB-first avoids VLM hallucination on correct relation
+- Constrained selection (6 options) more reliable than open generation
+- Verification catches bad suggestions (prevents new hallucinations)
+- Publishable contribution: "cascade with decreasing cost"
+
+**Commit:** `03bccf6` — Pushed to GitHub with detailed commit message
+
+**Next steps (timing critical — 4 days to deadline):**
+1. **Run Cell 7 of synthetic test** (15 min) — check corrected_accuracy ≥ 50%
+2. **If pass:** Run 600-image pipeline overnight (6 hrs, ~$3.80)
+3. **Apr 5 PM:** Analyze results, spot-check qualitative
+4. **Apr 6:** Report writing (15+ hours)
+5. **Apr 7:** Polish + buffer
+6. **Apr 8:** SUBMIT
+
+**Expected outcome after fixes:**
+- Corrected accuracy: 50–70% (up from 20%)
+- Detection-to-correction gap: 75% → 60–70% (much tighter)
+- Relation quality: Better (KB-grounded, verified, not open-ended VLM)
