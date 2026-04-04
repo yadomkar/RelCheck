@@ -105,6 +105,30 @@ NEAR_DISTANCE_THRESHOLD: float = 0.3
 Normalized bbox distance ≤ 0.3 → considered spatially close."""
 
 # ════════════════════════════════════════════════════════════════════════════
+# ABSTRACT / NON-DETECTABLE ENTITIES (skip GDino object detection)
+# ════════════════════════════════════════════════════════════════════════════
+
+ABSTRACT_ENTITIES: frozenset[str] = frozenset({
+    # Relative locations / scene regions
+    "center", "middle", "left side", "right side", "left", "right",
+    "top", "bottom", "foreground", "background", "front", "back",
+    "corner", "edge", "side", "area", "portion", "section", "part",
+    "left side of the image", "right side of the image",
+    "left side of the scene", "right side of the scene",
+    "center of the image", "center of the scene",
+    "left portion", "right portion", "upper portion", "lower portion",
+    # Abstract concepts that LLaVA likes to reference
+    "game", "scene", "setting", "environment", "event", "activity",
+    "action", "moment", "situation", "occasion", "atmosphere",
+    "meal", "conversation", "view", "shot", "frame",
+    # Relative descriptors often used as "objects" in triples
+    "each other", "one another", "it", "them", "itself",
+})
+"""Entity names that are scene locations or abstract concepts, not physical
+objects detectable by GroundingDINO. When a triple's subject or object is
+in this set, skip object-existence checks to avoid false positive deletions."""
+
+# ════════════════════════════════════════════════════════════════════════════
 # SPATIAL RELATION KEYWORDS
 # ════════════════════════════════════════════════════════════════════════════
 

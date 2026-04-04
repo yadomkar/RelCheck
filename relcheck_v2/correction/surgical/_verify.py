@@ -12,7 +12,7 @@ from __future__ import annotations
 from PIL import Image
 
 from ..._logging import log
-from ...config import SPATIAL_OPPOSITES
+from ...config import ABSTRACT_ENTITIES, SPATIAL_OPPOSITES
 from ...detection import find_best_bbox_from_kb
 from ...spatial import SPATIAL_TRIPLE_RE
 from ...types import (
@@ -145,6 +145,21 @@ def verify_spatial_triple(
 
     # Fallback: check entity existence + VQA
     if verdict == Verdict.UNKNOWN:
+        # Skip object-existence check for abstract/positional terms
+        # (e.g. "center", "left side", "game") — these are not physical objects
+        _obj_lower = obj.lower().strip()
+        _subj_lower = subj.lower().strip()
+        if _obj_lower in ABSTRACT_ENTITIES or _subj_lower in ABSTRACT_ENTITIES:
+            log.debug("[%s] Skipping abstract entity '%s'/'%s' — not detectable",
+                      img_id, subj, obj)
+            # Leave as UNKNOWN → no correction
+            all_checks.append(VerificationResult(
+                triple=triple, verdict=Verdict.UNKNOWN, confidence=Confidence.LOW,
+                reason=f"abstract entity ('{obj}') — skipped",
+                evidence_source="spatial",
+            ))
+            return
+
         obj_box_check = find_best_bbox_from_kb(obj, kb)
         if obj_box_check is None:
             exists = check_entity_exists_vqa(obj, pil_image)
@@ -199,6 +214,15 @@ def verify_action_attribute_triple(
     from ._consensus import consensus_confirms_triple
 
     subj, rel, obj = triple.subject, triple.relation, triple.object
+
+    # Skip abstract / non-detectable entities
+    if obj.lower().strip() in ABSTRACT_ENTITIES or subj.lower().strip() in ABSTRACT_ENTITIES:
+        log.debug("[%s] Skipping abstract entity in action triple '%s'", img_id, triple.claim)
+        all_checks.append(VerificationResult(
+            triple=triple, verdict=Verdict.UNKNOWN, confidence=Confidence.LOW,
+            reason=f"abstract entity — skipped", evidence_source="action_vqa",
+        ))
+        return
 
     # Action geometry pre-screen
     geo_family = classify_action_family(rel)
