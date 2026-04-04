@@ -3,11 +3,12 @@ RelCheck v2 — Object Detection
 ================================
 Batched GroundingDINO detection with proper list-of-lists format,
 torchvision IoU-based deduplication, and bbox utilities.
+
+Uses Detection dataclass for type-safe handling with backward-compatibility
+for tuple inputs via _ensure_detection() helper.
 """
 
 from __future__ import annotations
-
-from collections import Counter
 
 import torch
 from PIL import Image
@@ -16,9 +17,29 @@ from torchvision.ops import box_iou
 from .config import GDINO_BOX_THRESHOLD, GDINO_TEXT_THRESHOLD
 from .entity import clean_label, core_noun, candidate_synonyms
 from .models import get_gdino, DEVICE
+from .types import Detection, BBox
+from ._logging import log
 
-# Type alias for a single detection: (label, score, [x1, y1, x2, y2] normalized)
-Detection = tuple[str, float, list[float]]
+
+# ── Backward compatibility ───────────────────────────────────────────────
+
+def _ensure_detection(item: Detection | tuple[str, float, list[float]]) -> Detection:
+    """Convert tuple or Detection to Detection dataclass.
+
+    Ensures functions remain backward-compatible with raw tuple input
+    while maintaining type safety internally.
+
+    Args:
+        item: Either a Detection object or a (label, score, bbox) tuple.
+
+    Returns:
+        Detection dataclass instance.
+    """
+    if isinstance(item, Detection):
+        return item
+    if isinstance(item, (list, tuple)) and len(item) == 3:
+        return Detection(label=item[0], score=item[1], bbox=item[2])
+    raise TypeError(f"Expected Detection or 3-tuple, got {type(item)}")
 
 
 # ── Core detection ───────────────────────────────────────────────────────
@@ -35,7 +56,13 @@ def detect_objects(
       - Queries batched (default 4) to avoid attention dilution
       - Articles prefixed for better text encoder performance
 
-    Returns list of (label, score, [x1, y1, x2, y2]) with normalized coords.
+    Args:
+        image: PIL Image to detect objects in.
+        queries: List of entity labels to search for.
+        batch_size: Number of queries per forward pass (default 4).
+
+    Returns:
+        List of Detection objects with normalized bounding box coordinates.
     """
     model, processor = get_gdino()
 
@@ -78,43 +105,58 @@ def detect_objects(
             results["scores"], results[label_key], results["boxes"]
         ):
             x1, y1, x2, y2 = box.tolist()
-            all_dets.append((
-                clean_label(label),
-                score.item(),
-                [x1 / W, y1 / H, x2 / W, y2 / H],
-            ))
+            det = Detection(
+                label=clean_label(label),
+                score=score.item(),
+                bbox=[x1 / W, y1 / H, x2 / W, y2 / H],
+            )
+            all_dets.append(det)
 
+    log.debug("Detected %d objects from %d queries", len(all_dets), len(queries))
     return all_dets
 
 
 # ── Deduplication ────────────────────────────────────────────────────────
 
 def dedup_detections(
-    dets: list[Detection],
+    dets: list[Detection | tuple[str, float, list[float]]],
     iou_threshold: float = 0.5,
 ) -> list[Detection]:
     """Remove duplicate detections of the same class using torchvision IoU.
 
     Keeps the highest-confidence detection for each overlapping pair of
-    same-label boxes.
+    same-label boxes. Accepts both Detection objects and legacy tuples.
+
+    Args:
+        dets: List of Detection objects or (label, score, bbox) tuples.
+        iou_threshold: IoU threshold for considering boxes as duplicates.
+
+    Returns:
+        List of deduplicated Detection objects sorted by label then score.
     """
     if not dets:
         return []
 
+    # Convert all inputs to Detection objects for uniform handling
+    dets_normalized = [_ensure_detection(d) for d in dets]
+
+    # Sort by descending score for consistent priority
+    dets_sorted = sorted(dets_normalized, key=lambda x: -x.score)
+
     # Group by label
-    by_label: dict[str, list[tuple[float, list[float]]]] = {}
-    for label, score, bbox in sorted(dets, key=lambda x: -x[1]):
-        by_label.setdefault(label, []).append((score, bbox))
+    by_label: dict[str, list[Detection]] = {}
+    for det in dets_sorted:
+        by_label.setdefault(det.label, []).append(det)
 
     result: list[Detection] = []
 
     for label, entries in by_label.items():
         if len(entries) == 1:
-            result.append((label, entries[0][0], entries[0][1]))
+            result.append(entries[0])
             continue
 
         # Build tensor of boxes for IoU computation
-        boxes_tensor = torch.tensor([bbox for _, bbox in entries])
+        boxes_tensor = torch.tensor([det.bbox for det in entries])
         ious = box_iou(boxes_tensor, boxes_tensor)
 
         keep: list[bool] = [True] * len(entries)
@@ -128,10 +170,11 @@ def dedup_detections(
                     # Keep higher-confidence one (entries sorted by -score)
                     keep[j] = False
 
-        for idx, (score, bbox) in enumerate(entries):
+        for idx, det in enumerate(entries):
             if keep[idx]:
-                result.append((label, score, bbox))
+                result.append(det)
 
+    log.debug("Deduped %d → %d detections (IoU > %.2f)", len(dets_normalized), len(result), iou_threshold)
     return result
 
 
@@ -139,33 +182,44 @@ def dedup_detections(
 
 def find_best_bbox(
     entity: str,
-    detections: list[Detection],
-) -> list[float] | None:
+    detections: list[Detection | tuple[str, float, list[float]]],
+) -> BBox | None:
     """Find the highest-confidence bbox whose label matches entity.
 
     Uses core noun extraction + synonym matching for robust lookup.
     E.g. entity='large dog' matches detection label='a dog'.
+    Accepts both Detection objects and legacy tuples for backward compatibility.
+
+    Args:
+        entity: Entity label to search for (may include adjectives/articles).
+        detections: List of Detection objects or (label, score, bbox) tuples.
+
+    Returns:
+        Normalized bbox [x1, y1, x2, y2] of best matching detection, or None.
     """
     if not detections:
         return None
+
+    # Convert all inputs to Detection objects
+    dets_normalized = [_ensure_detection(d) for d in detections]
 
     target_core = core_noun(entity)
     target_syns = candidate_synonyms(target_core)
 
     best_score: float = -1.0
-    best_box: list[float] | None = None
+    best_box: BBox | None = None
 
-    for label, score, box in detections:
-        label_core = core_noun(label)
+    for det in dets_normalized:
+        label_core = core_noun(det.label)
         label_syns = candidate_synonyms(label_core)
 
         # Match if synonym sets overlap or substring containment
         if (target_syns & label_syns
                 or target_core in label_core
                 or label_core in target_core):
-            if score > best_score:
-                best_score = score
-                best_box = box
+            if det.score > best_score:
+                best_score = det.score
+                best_box = det.bbox
 
     return best_box
 
@@ -173,11 +227,18 @@ def find_best_bbox(
 def find_best_bbox_from_kb(
     entity_name: str,
     kb: dict,
-) -> list[float] | None:
+) -> BBox | None:
     """Find bbox from a Visual KB's detections list.
 
-    KB detections are stored as list of (label, score, bbox) tuples,
-    same format as detect_objects output.
+    KB detections may be stored as Detection objects, tuples, or a mix.
+    The function handles any format via _ensure_detection().
+
+    Args:
+        entity_name: Entity to find in the KB detections.
+        kb: Visual KB dict with "detections" key.
+
+    Returns:
+        Normalized bbox of best matching detection, or None if not found.
     """
     detections = kb.get("detections", [])
     return find_best_bbox(entity_name, detections)
@@ -185,15 +246,24 @@ def find_best_bbox_from_kb(
 
 def crop_to_bboxes(
     image: Image.Image,
-    box1: list[float],
-    box2: list[float],
+    box1: BBox,
+    box2: BBox,
     padding: float = 0.15,
 ) -> Image.Image:
     """Crop image to the region containing both bounding boxes.
 
-    Boxes are in normalized coords [x1, y1, x2, y2].
-    Padding is added around the union of both boxes.
-    Returns the original image if the crop would be too small.
+    Useful for focused VQA on two entities (e.g., subject and object of
+    a relational claim). Computes the union of both boxes with symmetric
+    padding, then returns the original image if the crop would be too small.
+
+    Args:
+        image: PIL Image to crop.
+        box1: First bbox as [x1, y1, x2, y2] in normalized (0–1) coords.
+        box2: Second bbox as [x1, y1, x2, y2] in normalized (0–1) coords.
+        padding: Fraction of the union to add as padding (default 0.15 = 15%).
+
+    Returns:
+        Cropped PIL Image, or original image if crop would be < 32×32 pixels.
     """
     W, H = image.size
     xs = [box1[0], box1[2], box2[0], box2[2]]
@@ -207,7 +277,10 @@ def crop_to_bboxes(
     left, top = int(x1 * W), int(y1 * H)
     right, bottom = int(x2 * W), int(y2 * H)
 
-    if right - left < 32 or bottom - top < 32:
+    crop_width, crop_height = right - left, bottom - top
+    if crop_width < 32 or crop_height < 32:
+        log.debug("Crop too small (%d×%d), returning original image", crop_width, crop_height)
         return image
 
+    log.debug("Cropped to %.1f%% of image area", 100 * (crop_width * crop_height) / (W * H))
     return image.crop((left, top, right, bottom))

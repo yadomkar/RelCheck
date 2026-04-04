@@ -21,6 +21,14 @@ together>=1.2.0
 python-Levenshtein>=0.21.0
 nltk>=3.8.0
 
+# Text processing
+json-repair>=0.30.0        # robust LLM JSON recovery
+pysbd>=0.3.4               # sentence boundary detection (EMNLP 2020)
+rapidfuzz>=3.0.0           # fuzzy string matching
+
+# Retry / resilience
+tenacity>=8.2.0
+
 # Data / Visualization
 pandas>=2.0.0
 matplotlib>=3.7.0

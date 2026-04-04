@@ -15,6 +15,7 @@ from PIL import Image
 from .api import llm_call, encode_b64
 from .config import CAPTIONER_MODELS, DESCRIBE_PROMPT, VLM_MODEL
 from .models import get_llava, get_blip2
+from ._logging import log
 
 
 # ── API-based captioning (Together.ai) ─────────────────────────────────
@@ -28,6 +29,14 @@ def caption_image_api(
 
     Encodes the image as base64 JPEG and sends it with DESCRIBE_PROMPT.
     Works for any vision model on Together.ai (Qwen, etc.).
+
+    Args:
+        pil_image: PIL Image to caption.
+        model: Model key on Together.ai (e.g., 'Qwen/Qwen3-VL-8B-Instruct').
+        max_tokens: Maximum tokens in the generated caption. Defaults to 300.
+
+    Returns:
+        Generated caption string, or None if the API call failed.
     """
     b64 = encode_b64(pil_image)
     return llm_call(
@@ -48,7 +57,16 @@ def caption_image_llava(
 ) -> str | None:
     """Generate a caption using locally-loaded LLaVA-1.5-7B.
 
-    Returns None if the model failed to load (e.g. insufficient GPU memory).
+    Loads the model from Hugging Face if not already in memory. Applies the
+    model's chat template and generates a caption conditioned on DESCRIBE_PROMPT.
+
+    Args:
+        pil_image: PIL Image to caption.
+        max_new_tokens: Maximum tokens in the generated caption. Defaults to 300.
+
+    Returns:
+        Generated caption string, or None if the model failed to load
+        (e.g., insufficient GPU memory).
     """
     model, processor = get_llava()
     if model is None:
@@ -80,7 +98,15 @@ def caption_image_blip2(
 ) -> str | None:
     """Generate a caption using locally-loaded BLIP-2 (blip2-flan-t5-xl).
 
-    Returns None if the model failed to load.
+    Loads the model from Hugging Face if not already in memory. Generates a short
+    caption using the BLIP-2 architecture with T5 decoder.
+
+    Args:
+        pil_image: PIL Image to caption.
+        max_new_tokens: Maximum tokens in the generated caption. Defaults to 50.
+
+    Returns:
+        Generated caption string, or None if the model failed to load.
     """
     model, processor = get_blip2()
     if model is None:
@@ -104,12 +130,21 @@ def caption_image(
 ) -> str | None:
     """Generate a caption using the specified captioner.
 
+    Routes to the appropriate captioning backend:
+      - 'llava': Local LLaVA-1.5-7B via GPU
+      - 'blip2': Local BLIP-2 via GPU
+      - Other keys: API-based via Together.ai (e.g., 'qwen', 'internvl')
+
+    Falls back to Together.ai API if the requested local model is not available.
+
     Args:
-        pil_image: PIL Image to caption
-        captioner: One of 'blip2', 'llava', 'qwen' (or any Together.ai model key)
+        pil_image: PIL Image to caption.
+        captioner: Model identifier. One of 'blip2', 'llava', 'qwen',
+                   or any Together.ai model key. Defaults to 'llava'.
 
     Returns:
-        Caption string, or None if captioning failed.
+        Generated caption string, or None if captioning failed
+        (e.g., model not available, API error).
     """
     if captioner == "llava":
         model, _ = get_llava()
@@ -120,12 +155,12 @@ def caption_image(
         model, _ = get_blip2()
         if model is not None:
             return caption_image_blip2(pil_image)
-        print("  WARNING: BLIP-2 not loaded locally. Skipping.")
+        log.warning("BLIP-2 not loaded locally. Skipping.")
         return None
 
     # Fallback: API-based captioning
     api_model = CAPTIONER_MODELS.get(captioner, VLM_MODEL)
     if api_model is None:
-        print(f"  WARNING: No API model for captioner '{captioner}'. Skipping.")
+        log.warning(f"No API model for captioner '{captioner}'. Skipping.")
         return None
     return caption_image_api(pil_image, api_model)

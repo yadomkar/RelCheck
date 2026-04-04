@@ -16,6 +16,7 @@ from .api import llm_call
 
 # ── Question → Statement conversion ───────────────────────────────────
 
+
 def question_to_statement(question: str) -> str | None:
     """Convert an R-Bench yes/no question to a false declarative statement.
 
@@ -24,10 +25,10 @@ def question_to_statement(question: str) -> str | None:
       Pattern 2: "Is there a/an SUBJECT REST" → "There is a SUBJECT REST."
 
     Args:
-        question: R-Bench yes/no question string
+        question: R-Bench yes/no question string.
 
     Returns:
-        Declarative statement, or None if conversion failed.
+        Declarative statement string, or None if conversion failed.
     """
     q = question.strip().rstrip("?").strip()
 
@@ -56,11 +57,15 @@ def question_to_statement(question: str) -> str | None:
 
 # ── Triple extraction from question ───────────────────────────────────
 
+
 def parse_question(question: str) -> tuple[str, str, str]:
     """Extract (subject, relation, object) triple from an R-Bench yes/no question.
 
-    Uses LLM to parse the question into a structured triple.
-    Falls back to ('entity', 'unknown', 'entity') on failure.
+    Uses LLM to parse the question into a structured triple. Falls back to
+    ('entity', 'unknown', 'entity') on parsing failure.
+
+    Args:
+        question: R-Bench yes/no question string.
 
     Returns:
         Tuple of (subject, relation, object) strings.
@@ -100,8 +105,14 @@ _ACTION_KEYWORDS: frozenset[str] = frozenset({
 def classify_rel_type(question: str) -> str:
     """Classify a question's relation as SPATIAL, ACTION, or ATTRIBUTE.
 
-    Simple keyword matching against the question text.
-    Used for per-relation-type evaluation breakdown.
+    Uses simple keyword matching against the question text to categorize
+    relation types. Used for per-relation-type evaluation breakdown.
+
+    Args:
+        question: R-Bench yes/no question string.
+
+    Returns:
+        One of "SPATIAL", "ACTION", or "ATTRIBUTE".
     """
     q = question.lower()
     if any(w in q for w in _SPATIAL_KEYWORDS):

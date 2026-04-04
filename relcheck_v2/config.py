@@ -7,30 +7,106 @@ Nothing here imports from other relcheck_v2 modules (leaf dependency).
 
 from __future__ import annotations
 
-# ── Model IDs ────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# MODEL IDS
+# ════════════════════════════════════════════════════════════════════════════
 
-LLM_MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-VLM_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
-GDINO_ID = "IDEA-Research/grounding-dino-tiny"
+LLM_MODEL: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+VLM_MODEL: str = "Qwen/Qwen3-VL-8B-Instruct"
+GDINO_ID: str = "IDEA-Research/grounding-dino-tiny"
 
-# ── Detection thresholds ─────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# DETECTION THRESHOLDS
+# ════════════════════════════════════════════════════════════════════════════
 
 GDINO_BOX_THRESHOLD: float = 0.15
 GDINO_TEXT_THRESHOLD: float = 0.10
 
-# ── Spatial geometry ─────────────────────────────────────────────────────
-
-SPATIAL_DEADZONE: float = 0.08  # centroid distance within this → ambiguous
-
-# ── VQA decision thresholds ──────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# VQA DECISION THRESHOLDS
+# ════════════════════════════════════════════════════════════════════════════
 
 YES_SUPPORTED: float = 0.65   # avg yes_ratio >= this → supported
 YES_UNSUPPORTED: float = 0.40  # avg yes_ratio <  this → unsupported
 # Between 0.40 and 0.65 → uncertain
 
-# ── Caption length threshold ─────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# CAPTION PROCESSING
+# ════════════════════════════════════════════════════════════════════════════
 
 SHORT_CAPTION_THRESHOLD: int = 30  # words; below → enrichment, above → correction
+
+# ════════════════════════════════════════════════════════════════════════════
+# ENRICHMENT & CORRECTION MAGIC NUMBERS
+# ════════════════════════════════════════════════════════════════════════════
+
+ENRICHMENT_MAX_SENTENCES: int = 10
+"""Maximum number of sentences in enriched caption.
+Prevents runaway rewrites that lose information."""
+
+VERIFY_KB_MIN_LENGTH: int = 15
+"""Minimum caption length (characters) to attempt KB verification.
+Skips verification on very short captions that can't contain enough info."""
+
+CORRECTION_LENGTH_RATIO_MIN: float = 0.70
+"""Minimum ratio of corrected_length / original_length.
+Below this → reject correction (deletes too much valid content)."""
+
+CORRECTION_LENGTH_RATIO_MAX: float = 1.30
+"""Maximum ratio of corrected_length / original_length.
+Above this → reject correction (adds too much speculative content)."""
+
+ADDENDUM_MAX_WORDS_ADDED: int = 30
+"""Maximum words to add via addendum when enriching.
+Prevents bloat while allowing meaningful additions."""
+
+ADDENDUM_SURVIVAL_RATIO: float = 0.80
+"""Minimum survival ratio of addendum words after KB verification.
+Below this → addendum marked as low-confidence, may be rejected."""
+
+# ════════════════════════════════════════════════════════════════════════════
+# CROP-BASED VQA PARAMETERS
+# ════════════════════════════════════════════════════════════════════════════
+
+CROP_PADDING: float = 0.15
+"""Padding ratio (±15%) around entity bbox for standard crop.
+Provides context without including unrelated objects."""
+
+CROP_PADDING_WIDE: float = 0.25
+"""Padding ratio (±25%) for wide crops (relation context).
+Used when both subject and object need visible context."""
+
+# ════════════════════════════════════════════════════════════════════════════
+# SPATIAL GEOMETRY THRESHOLDS
+# ════════════════════════════════════════════════════════════════════════════
+
+SPATIAL_DEADZONE: float = 0.08
+"""Centroid distance within this → ambiguous spatial relation.
+Used to mark uncertain geometries for VQA fallback."""
+
+ADJACENCY_GAP_RATIO: float = 0.30
+"""Maximum gap (as fraction of object size) to mark objects as adjacent.
+Gap larger than this → objects are separated, not touching."""
+
+MOUNTING_TOP_RATIO: float = 0.65
+"""Centroid position threshold (normalized [0,1]) for "on" vs "standing near".
+Below 0.65 in vertical space → likely 'on' or 'over' relation."""
+
+CONTAINMENT_OVERLAP_MIN: float = 0.50
+"""Minimum overlap ratio for "inside" relation.
+Below this → containment is ambiguous, requires VQA confirmation."""
+
+KEYPOINT_CONFIDENCE_MIN: float = 0.3
+"""Minimum confidence score for pose keypoints.
+Below this → keypoint considered unreliable for spatial analysis."""
+
+NEAR_DISTANCE_THRESHOLD: float = 0.3
+"""Distance ratio threshold for "near" or "next to" relations.
+Normalized bbox distance ≤ 0.3 → considered spatially close."""
+
+# ════════════════════════════════════════════════════════════════════════════
+# SPATIAL RELATION KEYWORDS
+# ════════════════════════════════════════════════════════════════════════════
 
 # ── Spatial relation keywords ────────────────────────────────────────────
 
@@ -43,7 +119,9 @@ SPATIAL_RELS: frozenset[str] = frozenset({
     "inside", "outside",
 })
 
-# ── Action keywords ──────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# ACTION RELATION KEYWORDS
+# ════════════════════════════════════════════════════════════════════════════
 
 ACTION_WORDS: frozenset[str] = frozenset({
     "riding", "holding", "carrying", "eating", "drinking", "wearing",
@@ -53,7 +131,9 @@ ACTION_WORDS: frozenset[str] = frozenset({
     "jumping", "climbing", "mounted", "chained",
 })
 
-# ── Spatial opposites (for contradiction detection) ──────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# SPATIAL RELATION OPPOSITES (for contradiction detection)
+# ════════════════════════════════════════════════════════════════════════════
 
 SPATIAL_OPPOSITES: dict[str, str] = {
     "left":         "right",
@@ -69,7 +149,9 @@ SPATIAL_OPPOSITES: dict[str, str] = {
     "to the right": "to the left",
 }
 
-# ── Counterfactual relations (for contrastive VQA) ───────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# COUNTERFACTUAL RELATIONS (for contrastive VQA)
+# ════════════════════════════════════════════════════════════════════════════
 
 COUNTERFACTUAL_MAP: dict[str, str] = {
     "riding":       "standing next to",
@@ -92,7 +174,9 @@ COUNTERFACTUAL_MAP: dict[str, str] = {
     "leaning on":   "standing near",
 }
 
-# ── Entity synonyms (visual entities, hand-curated) ─────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# ENTITY SYNONYMS (visual entities, hand-curated)
+# ════════════════════════════════════════════════════════════════════════════
 
 ENTITY_SYNONYMS: dict[str, list[str]] = {
     "person":       ["person", "man", "woman", "child", "boy", "girl", "individual", "human", "people"],
@@ -162,7 +246,9 @@ ENTITY_SYNONYMS: dict[str, list[str]] = {
     "cart":         ["cart", "trolley", "wagon"],
 }
 
-# ── Broad detection categories (for KB construction) ─────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# BROAD DETECTION CATEGORIES (for KB construction)
+# ════════════════════════════════════════════════════════════════════════════
 
 BROAD_CATEGORIES: list[str] = [
     "person", "man", "woman", "child", "boy", "girl",
@@ -175,7 +261,9 @@ BROAD_CATEGORIES: list[str] = [
     "tree", "flower", "grass", "water",
 ]
 
-# ── Captioner configuration ─────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# CAPTIONER CONFIGURATION
+# ════════════════════════════════════════════════════════════════════════════
 
 CAPTIONER_MODELS: dict[str, str | None] = {
     "blip2": None,                          # loaded locally
@@ -189,7 +277,9 @@ DESCRIBE_PROMPT: str = (
     "or interactions taking place, and notable attributes like colors and sizes."
 )
 
-# ── R-POPE evaluation ──────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# R-POPE EVALUATION
+# ════════════════════════════════════════════════════════════════════════════
 
 RPOPE_PROMPT_TMPL: str = (
     "Based ONLY on this description, answer the question with Yes or No.\n\n"
@@ -198,7 +288,9 @@ RPOPE_PROMPT_TMPL: str = (
     "Answer ONLY Yes or No."
 )
 
-# ── Google Drive paths (Colab defaults) ──────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# GOOGLE DRIVE PATHS (Colab defaults)
+# ════════════════════════════════════════════════════════════════════════════
 
-DRIVE_IMAGES_DIR = "/content/drive/MyDrive/RelCheck_Data/images"
-RBENCH_PATH = "/content/drive/MyDrive/RelCheck_Data/rbench_data.json"
+DRIVE_IMAGES_DIR: str = "/content/drive/MyDrive/RelCheck_Data/images"
+RBENCH_PATH: str = "/content/drive/MyDrive/RelCheck_Data/rbench_data.json"

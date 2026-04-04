@@ -14,6 +14,7 @@ import spacy
 from rapidfuzz import fuzz
 from rapidfuzz.distance import Levenshtein
 
+from ._logging import log
 from .config import ENTITY_SYNONYMS
 
 # ── Lazy spaCy loading ───────────────────────────────────────────────────
@@ -34,8 +35,12 @@ def _get_nlp() -> spacy.language.Language:
 def extract_nouns(text: str) -> list[str]:
     """Extract unique noun root lemmas via spaCy noun chunks.
 
-    Returns deduplicated, lowercased root lemmas. Handles multi-word nouns
-    like 'baseball bat' better than stopword-filter heuristics.
+    Args:
+        text: Input text to analyze.
+
+    Returns:
+        Deduplicated, lowercased root lemmas. Handles multi-word nouns
+        like 'baseball bat' better than stopword-filter heuristics.
     """
     doc = _get_nlp()(text)
     return list({chunk.root.lemma_.lower() for chunk in doc.noun_chunks})
@@ -45,6 +50,12 @@ def extract_nouns(text: str) -> list[str]:
 
 def core_noun(phrase: str) -> str:
     """Extract the head noun from a phrase via spaCy.
+
+    Args:
+        phrase: Input phrase to analyze.
+
+    Returns:
+        The head noun (lemmatized, lowercased).
 
     Examples:
         'a large red ball'  → 'ball'
@@ -65,7 +76,14 @@ def core_noun(phrase: str) -> str:
 # ── Normalization ────────────────────────────────────────────────────────
 
 def normalize(text: str) -> str:
-    """Lowercase and strip leading articles (a, an, the, some)."""
+    """Lowercase and strip leading articles (a, an, the, some).
+
+    Args:
+        text: Input text to normalize.
+
+    Returns:
+        Normalized text (lowercased, articles stripped).
+    """
     if not text:
         return ""
     text = text.lower().strip()
@@ -78,7 +96,14 @@ def normalize(text: str) -> str:
 def clean_label(label: str) -> str:
     """Clean a detection label: lowercase + strip articles.
 
-    Used to normalize GroundingDINO output labels.
+    Args:
+        label: Detection label (e.g., from GroundingDINO).
+
+    Returns:
+        Cleaned label.
+
+    Note:
+        Used to normalize GroundingDINO output labels.
     """
     return normalize(label)
 
@@ -88,9 +113,16 @@ def clean_label(label: str) -> str:
 def candidate_synonyms(name: str) -> set[str]:
     """All known synonyms for a name, plus the name itself.
 
-    Checks both the full name and each individual word against
-    ENTITY_SYNONYMS. E.g. 'cell phone' → {'phone', 'cell phone',
-    'smartphone', 'mobile'}.
+    Args:
+        name: Entity name to look up.
+
+    Returns:
+        Set of synonyms, including the name itself.
+
+    Note:
+        Checks both the full name and each individual word against
+        ENTITY_SYNONYMS. E.g. 'cell phone' → {'phone', 'cell phone',
+        'smartphone', 'mobile'}.
     """
     syns: set[str] = {name}
     # Direct lookup
@@ -106,10 +138,19 @@ def candidate_synonyms(name: str) -> set[str]:
 def entity_matches(a: str, b: str, threshold: int = 80) -> bool:
     """Fuzzy entity matching via core noun + synonyms + rapidfuzz fallback.
 
-    Three-level cascade:
+    Args:
+        a: First entity name.
+        b: Second entity name.
+        threshold: Minimum token_sort_ratio for fuzzy match (0–100).
+
+    Returns:
+        True if entities match via any of the four levels.
+
+    Four-level cascade (in order):
         1. Exact core noun match (fast path)
-        2. Synonym set intersection
-        3. rapidfuzz token_sort_ratio >= threshold
+        2. Substring containment (handles 'dog' vs 'large dog')
+        3. Synonym set intersection (maps 'man' ↔ 'person', etc.)
+        4. Fuzzy token_sort_ratio >= threshold (robustness fallback)
     """
     if not a or not b:
         return False
@@ -138,11 +179,27 @@ def entity_matches(a: str, b: str, threshold: int = 80) -> bool:
 # ── Edit distance ────────────────────────────────────────────────────────
 
 def levenshtein_distance(s1: str, s2: str) -> int:
-    """Character-level edit distance via rapidfuzz (C extension, ~100x faster)."""
+    """Character-level edit distance via rapidfuzz (C extension, ~100x faster).
+
+    Args:
+        s1: First string.
+        s2: Second string.
+
+    Returns:
+        Edit distance (number of single-character edits).
+    """
     return Levenshtein.distance(s1, s2)
 
 
 def edit_rate(before: str, after: str) -> float:
-    """Normalized Levenshtein distance between two strings."""
+    """Normalized Levenshtein distance between two strings.
+
+    Args:
+        before: Original string.
+        after: Modified string.
+
+    Returns:
+        Edit rate as a float in [0, 1]: distance / max(len(before), len(after)).
+    """
     max_len = max(len(before), len(after), 1)
     return levenshtein_distance(before, after) / max_len

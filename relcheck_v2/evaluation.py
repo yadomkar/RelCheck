@@ -10,6 +10,7 @@ Compares answers against R-Bench ground truth to score accuracy.
 
 from __future__ import annotations
 
+from ._logging import log
 from .api import llm_call
 from .config import RPOPE_PROMPT_TMPL
 
@@ -59,8 +60,20 @@ def compute_rpope_stats(
         - 'corr_answer': str | None (LLM answer on corrected caption)
         - 'rel_type': str ('SPATIAL', 'ACTION', 'ATTRIBUTE')
 
+    Args:
+        results: List of evaluation result dicts with required keys.
+
     Returns:
-        Dict with overall accuracy, per-type breakdown, and change counts.
+        Dict with keys:
+            - 'total': int, number of valid results
+            - 'orig_accuracy': float, fraction of original answers matching GT
+            - 'corr_accuracy': float, fraction of corrected answers matching GT
+            - 'orig_correct': int, count of correct original answers
+            - 'corr_correct': int, count of correct corrected answers
+            - 'improved': int, count of improved results (orig wrong, corr right)
+            - 'regressed': int, count of regressed results (orig right, corr wrong)
+            - 'net_change': int, improved - regressed
+            - 'per_type': dict, breakdown by relation type
     """
     total = 0
     orig_correct = 0
@@ -122,7 +135,15 @@ def compute_rpope_stats(
 
 
 def format_rpope_summary(stats: dict) -> str:
-    """Format R-POPE stats dict into a human-readable summary string."""
+    """Format R-POPE stats dict into a human-readable summary string.
+
+    Args:
+        stats: Output dict from compute_rpope_stats().
+
+    Returns:
+        Multi-line string with formatted R-POPE results, including per-type
+        breakdown and overall accuracy delta.
+    """
     lines = [
         "=" * 60,
         "R-POPE LLM-Judge Results",
@@ -170,16 +191,22 @@ def run_synthetic_rpope(
       - corrected (after RelCheck correction)
 
     Args:
-        injected_data: {img_id: {original_caption, corrupted_caption,
-                        injected_question, rel_type, ...}}
-        corrected_captions: {img_id: corrected_caption_str}
-        rbench_questions: optional {img_id: [{question, answer}]} for
-                          supplemental evaluation on non-injected questions
-        verbose: print per-image results
+        injected_data: Dict mapping img_id to dict with keys:
+            'original_caption' (str), 'corrupted_caption' (str),
+            'injected_question' (str), 'rel_type' (str), and others.
+        corrected_captions: Dict mapping img_id to corrected caption string.
+        rbench_questions: Optional dict mapping img_id to list of dicts with
+            'question' and 'answer' keys for supplemental evaluation on
+            non-injected R-Bench questions.
+        verbose: If True, log per-image results and summaries at info/debug level.
 
     Returns:
-        Dict with 'main' results (injected questions) and 'supplemental'
-        results (other R-Bench questions for same images).
+        Dict with keys:
+            - 'main': Dict with main evaluation results on injected questions:
+                - 'total', 'orig_no', 'corr_no', 'fixed_no'
+                - 'true_drops', 'recoveries', 'per_type', 'rows'
+            - 'supplemental': Dict with supplemental evaluation on other R-Bench
+                questions (if rbench_questions was provided)
     """
     corrected_img_ids = {
         img_id for img_id, inj in injected_data.items()
@@ -187,8 +214,8 @@ def run_synthetic_rpope(
         and corrected_captions[img_id] != inj["corrupted_caption"]
     }
     if verbose:
-        print(f"Images modified by RelCheck: {len(corrected_img_ids)}/{len(injected_data)}")
-        print("\nRunning R-POPE LLM-Judge on injected questions...\n")
+        log.info("Images modified by RelCheck: %d/%d", len(corrected_img_ids), len(injected_data))
+        log.info("Running R-POPE LLM-Judge on injected questions...")
 
     total = orig_no = corr_no = fixed_no = 0
     true_drops = recoveries = 0
@@ -244,9 +271,9 @@ def run_synthetic_rpope(
         rec = " + RECOVERED" if (injected_ok and fixed_ans == "no") else ""
         rows.append((img_id, rel_type, orig_ans, corr_ans, fixed_ans, det + rec))
         if verbose:
-            print(f"  [{img_id}] [{rel_type}]{det}{rec}")
-            print(f"    Q: {question}")
-            print(f"    orig={orig_ans}  corr={corr_ans}  fixed={fixed_ans}")
+            log.debug("[%s] [%s]%s%s", img_id, rel_type, det, rec)
+            log.debug("  Q: %s", question)
+            log.debug("  orig=%s  corr=%s  fixed=%s", orig_ans, corr_ans, fixed_ans)
 
     # ── Main summary ──
     main_results = {
@@ -256,7 +283,7 @@ def run_synthetic_rpope(
     }
 
     if total == 0:
-        print("WARNING: nothing evaluated — check injected_data and corrected_captions")
+        log.warning("Nothing evaluated — check injected_data and corrected_captions")
     elif verbose:
         _print_main_summary(main_results)
 
@@ -272,7 +299,11 @@ def run_synthetic_rpope(
 
 
 def _print_main_summary(r: dict) -> None:
-    """Print main R-POPE summary for synthetic test."""
+    """Log main R-POPE summary for synthetic test.
+
+    Args:
+        r: Result dict from run_synthetic_rpope['main'].
+    """
     total = r["total"]
     acc_orig = 100 * r["orig_no"] / total
     acc_corr = 100 * r["corr_no"] / total
@@ -280,27 +311,27 @@ def _print_main_summary(r: dict) -> None:
     drop = acc_corr - acc_orig
     recovery = acc_fixed - acc_corr
 
-    print(f"\n{'=' * 60}")
-    print("R-POPE Results (GT=no for all injected questions)")
-    print("=" * 60)
-    print(f"  Images evaluated:   {total}")
+    log.info("=" * 60)
+    log.info("R-POPE Results (GT=no for all injected questions)")
+    log.info("=" * 60)
+    log.info("  Images evaluated:   %d", total)
     td = r["true_drops"]
     rec = r["recoveries"]
-    print(f"  Injection detected: {td}/{total}  ({100 * td / total:.0f}%)")
-    print(f"  Recoveries:         {rec}/{max(td, 1)}  "
-          f"({100 * rec / max(td, 1):.0f}% of detectable)")
-    print()
-    print("  Accuracy (fraction answering no = correct):")
-    print(f"    Original:   {acc_orig:.1f}%  (caption without hallucination)")
-    print(f"    Corrupted:  {acc_corr:.1f}%  (after injection,   delta={drop:+.1f}%)")
-    print(f"    Corrected:  {acc_fixed:.1f}%  (after RelCheck,   delta={recovery:+.1f}%)")
-    print()
-    print("  By relation type:")
+    log.info("  Injection detected: %d/%d  (%.0f%%)", td, total, 100 * td / total)
+    log.info("  Recoveries:         %d/%d  (%.0f%% of detectable)",
+             rec, max(td, 1), 100 * rec / max(td, 1))
+    log.info("")
+    log.info("  Accuracy (fraction answering no = correct):")
+    log.info("    Original:   %.1f%%  (caption without hallucination)", acc_orig)
+    log.info("    Corrupted:  %.1f%%  (after injection,   delta=%+.1f%%)", acc_corr, drop)
+    log.info("    Corrected:  %.1f%%  (after RelCheck,   delta=%+.1f%%)", acc_fixed, recovery)
+    log.info("")
+    log.info("  By relation type:")
     for rtype, c in sorted(r["per_type"].items()):
         t = c["total"]
-        print(f"    {rtype:10} n={t}  orig={c['orig_no']}/{t}  "
-              f"corr={c['corr_no']}/{t}  fixed={c['fixed_no']}/{t}  "
-              f"drops={c['drops']}  rec={c['rec']}")
+        log.info("    %-10s n=%d  orig=%d/%d  corr=%d/%d  fixed=%d/%d  drops=%d  rec=%d",
+                 rtype, t, c["orig_no"], t, c["corr_no"], t, c["fixed_no"], t,
+                 c["drops"], c["rec"])
 
 
 def _run_supplemental_rpope(
@@ -310,11 +341,23 @@ def _run_supplemental_rpope(
     rbench_questions: dict,
     verbose: bool = True,
 ) -> dict:
-    """Evaluate non-injected R-Bench questions on same images."""
+    """Evaluate non-injected R-Bench questions on same images.
+
+    Args:
+        injected_data: Original injected_data dict from run_synthetic_rpope.
+        corrected_captions: Corrected captions dict from run_synthetic_rpope.
+        corrected_img_ids: Set of image IDs that were modified by RelCheck.
+        rbench_questions: Dict mapping img_id to list of R-Bench Q&A dicts.
+        verbose: If True, log results at info level.
+
+    Returns:
+        Dict with keys 'all' and 'corrected_only', each containing total and
+        per-caption-version accuracies.
+    """
     if verbose:
-        print(f"\n{'=' * 60}")
-        print("Supplemental: all other R-Bench questions (same images)")
-        print("=" * 60)
+        log.info("=" * 60)
+        log.info("Supplemental: all other R-Bench questions (same images)")
+        log.info("=" * 60)
 
     rb2_total = rb2_orig = rb2_corr = rb2_fixed = 0
     rbc_total = rbc_orig = rbc_corr = rbc_fixed = 0
@@ -361,20 +404,20 @@ def _run_supplemental_rpope(
             s_orig = 100 * rb2_orig / rb2_total
             s_corr = 100 * rb2_corr / rb2_total
             s_fixed = 100 * rb2_fixed / rb2_total
-            print(f"  All images ({rb2_total} other questions):")
-            print(f"    Original:  {s_orig:.1f}%")
-            print(f"    Corrupted: {s_corr:.1f}%  (delta={s_corr - s_orig:+.1f}%)")
-            print(f"    Corrected: {s_fixed:.1f}%  (delta={s_fixed - s_corr:+.1f}%)")
+            log.info("  All images (%d other questions):", rb2_total)
+            log.info("    Original:  %.1f%%", s_orig)
+            log.info("    Corrupted: %.1f%%  (delta=%+.1f%%)", s_corr, s_corr - s_orig)
+            log.info("    Corrected: %.1f%%  (delta=%+.1f%%)", s_fixed, s_fixed - s_corr)
             if rbc_total > 0:
                 bc_orig = 100 * rbc_orig / rbc_total
                 bc_corr = 100 * rbc_corr / rbc_total
                 bc_fixed = 100 * rbc_fixed / rbc_total
                 n_c = len(corrected_img_ids & set(injected_data))
-                print(f"  Corrected images only (n={n_c}, {rbc_total} questions):")
-                print(f"    Original:  {bc_orig:.1f}%")
-                print(f"    Corrupted: {bc_corr:.1f}%  (delta={bc_corr - bc_orig:+.1f}%)")
-                print(f"    Corrected: {bc_fixed:.1f}%  (delta={bc_fixed - bc_corr:+.1f}%)")
+                log.info("  Corrected images only (n=%d, %d questions):", n_c, rbc_total)
+                log.info("    Original:  %.1f%%", bc_orig)
+                log.info("    Corrupted: %.1f%%  (delta=%+.1f%%)", bc_corr, bc_corr - bc_orig)
+                log.info("    Corrected: %.1f%%  (delta=%+.1f%%)", bc_fixed, bc_fixed - bc_corr)
         else:
-            print("  No supplemental questions found.")
+            log.info("  No supplemental questions found.")
 
     return supp
