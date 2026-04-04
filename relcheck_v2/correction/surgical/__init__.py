@@ -42,6 +42,7 @@ def correct_long_caption(
     kb: dict,
     pil_image: Image.Image | None = None,
     cross_captions: dict[str, str] | None = None,
+    include_addendum: bool = True,
 ) -> CorrectionResult:
     """Per-triple verification and surgical correction for detailed captions.
 
@@ -50,7 +51,7 @@ def correct_long_caption(
         2. For each triple: type-aware verification (geometry + VQA)
         3. Batch correction of all confirmed errors
         4. Post-verification: check for introduced hallucinations
-        5. Append missing spatial facts and visual description facts
+        5. Append missing spatial facts (skipped if include_addendum=False)
 
     Args:
         img_id: Image identifier (for logging).
@@ -58,6 +59,9 @@ def correct_long_caption(
         kb: Visual KB dict.
         pil_image: Full PIL image (required for VQA).
         cross_captions: Optional {captioner_name: caption_text} for consensus.
+        include_addendum: If False, skip Step 5 (fact appending). Use this for
+            the correction-only ablation to isolate hallucination correction
+            from information enrichment.
 
     Returns:
         CorrectionResult with corrected caption and metadata.
@@ -132,9 +136,11 @@ def correct_long_caption(
             applied = []
 
     # ── Step 5: Addendum ──
-    corrected, n_addendum = add_missing_fact_addendum(corrected, kb)
-    if n_addendum:
-        log.debug("[%s] +%d missing fact(s) appended", img_id, n_addendum)
+    n_addendum = 0
+    if include_addendum:
+        corrected, n_addendum = add_missing_fact_addendum(corrected, kb)
+        if n_addendum:
+            log.debug("[%s] +%d missing fact(s) appended", img_id, n_addendum)
 
     edit_dist = levenshtein_distance(caption, corrected)
     edit_rate_val = edit_dist / max(len(caption), len(corrected), 1)

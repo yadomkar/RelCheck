@@ -41,6 +41,7 @@ def enrich_caption_v3(
     kb: dict,
     pil_image: "Image.Image | None" = None,
     cross_captions: dict[str, str] | None = None,
+    include_addendum: bool = True,
 ) -> CorrectionResult:
     """Auto-dispatch correction based on caption word count.
 
@@ -57,6 +58,8 @@ def enrich_caption_v3(
             caption correction; ignored for enrichment).
         cross_captions: Mapping of {captioner_name: caption} from other
             models, used for consensus pre-filtering in long captions.
+        include_addendum: If False, skip appending missing KB facts after
+            correction (long captions only). Use for correction-only ablation.
 
     Returns:
         CorrectionResult with corrected/enriched caption and metadata.
@@ -78,4 +81,5 @@ def enrich_caption_v3(
         img_id, caption, kb,
         pil_image=pil_image,
         cross_captions=cross_captions,
+        include_addendum=include_addendum,
     )
