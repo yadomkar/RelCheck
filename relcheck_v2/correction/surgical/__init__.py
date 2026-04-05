@@ -174,7 +174,7 @@ def correct_long_caption(
     applied: list[dict] = []
 
     if errors:
-        corrected, applied = apply_sequential_correction(
+        corrected, applied = apply_batch_correction(
             img_id, caption, errors, kb, pil_image,
             metrics=metrics,
         )

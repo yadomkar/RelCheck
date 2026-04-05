@@ -63,8 +63,26 @@ def apply_triple_correction(
     cap_lower = caption.lower()
     wp_lower = wrong_phrase.lower()
 
-    # Use word-boundary regex to avoid matching inside other words
-    # e.g. replacing "on" should NOT match "on" inside "orientations"
+    # Strategy 1: Try to find the full claim context (subj + rel + obj) and replace just the rel part
+    if subj and obj_:
+        cn_s = core_noun(subj).lower()
+        cn_o = core_noun(obj_).lower()
+        # Find sentences containing both subject and object
+        sentences = caption.split('.')
+        for i, sent in enumerate(sentences):
+            sl = sent.lower()
+            if cn_s in sl and cn_o in sl and wp_lower in sl:
+                # Found the right sentence — do word-boundary replacement within this sentence only
+                boundary_pattern = re.compile(
+                    r'(?<!\w)' + re.escape(wp_lower) + r'(?!\w)',
+                    re.IGNORECASE,
+                )
+                new_sent = boundary_pattern.sub(correct_phrase, sent, count=1)
+                if new_sent != sent:
+                    sentences[i] = new_sent
+                    return '.'.join(sentences)
+
+    # Strategy 2: Word-boundary regex with proximity disambiguation (fallback)
     boundary_pattern = re.compile(
         r'(?<!\w)' + re.escape(wp_lower) + r'(?!\w)',
         re.IGNORECASE,
