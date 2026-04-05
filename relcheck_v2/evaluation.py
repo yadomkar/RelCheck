@@ -273,9 +273,19 @@ def run_synthetic_rpope(
         rec = " + RECOVERED" if (injected_ok and fixed_ans == "no") else ""
         rows.append((img_id, rel_type, orig_ans, corr_ans, fixed_ans, det + rec))
         if verbose:
-            log.debug("[%s] [%s]%s%s", img_id, rel_type, det, rec)
-            log.debug("  Q: %s", question)
-            log.debug("  orig=%s  corr=%s  fixed=%s", orig_ans, corr_ans, fixed_ans)
+            # Per-image detail at INFO level so it shows in Colab
+            status = "✓ RECOVERED" if (injected_ok and fixed_ans == "no") else (
+                "✗ NOT RECOVERED" if injected_ok else "— NOT DETECTED"
+            )
+            log.info("[%s] [%s] %s", img_id, rel_type, status)
+            log.info("  Q: %s", question)
+            log.info("  Judge: orig=%s  corr=%s  fixed=%s", orig_ans, corr_ans, fixed_ans)
+            # Show caption diff so we can see exactly what changed
+            if fixed_cap != corr_cap:
+                log.info("  CORRUPTED: %s", corr_cap)
+                log.info("  CORRECTED: %s", fixed_cap)
+            else:
+                log.info("  (caption unchanged)")
 
     # ── Main summary ──
     main_results = {
