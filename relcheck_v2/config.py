@@ -296,10 +296,9 @@ CAPTIONER_MODELS: dict[str, str | None] = {
 }
 
 DESCRIBE_PROMPT: str = (
-    "Describe this image in detail using 5-8 sentences. "
-    "For every object, state its exact spatial position relative to other objects "
-    "(left of, right of, above, below, in front of, behind, on top of, next to). "
-    "Describe what each person or animal is doing and what they are interacting with."
+    "Describe this image in detail. Include all objects, "
+    "their spatial positions relative to each other, any actions "
+    "or interactions taking place, and notable attributes like colors and sizes."
 )
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -307,8 +306,6 @@ DESCRIBE_PROMPT: str = (
 # ════════════════════════════════════════════════════════════════════════════
 
 RPOPE_PROMPT_TMPL: str = (
-    "You are evaluating whether an image caption accurately describes "
-    "spatial relationships, actions, and attributes between objects.\n"
     "Based ONLY on this description, answer the question with Yes or No.\n\n"
     'Description: "CAPTION_PLACEHOLDER"\n'
     "Question: QUESTION_PLACEHOLDER\n\n"
