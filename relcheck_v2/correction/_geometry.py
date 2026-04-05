@@ -149,19 +149,20 @@ def get_person_keypoints(
     """
     try:
         import torch
-        from transformers import ViTPoseProcessor, ViTPoseForPoseEstimation
+        from transformers import VitPoseForPoseEstimation, VitPoseImageProcessor
 
-        vitpose_model = ViTPoseForPoseEstimation.from_pretrained(
-            "google/vitpose-base-simple-coco", device_map="auto"
+        model_id = "usyd-community/vitpose-base-simple"
+        vitpose_model = VitPoseForPoseEstimation.from_pretrained(
+            model_id, device_map="auto"
         )
-        vitpose_processor = ViTPoseProcessor.from_pretrained(
-            "google/vitpose-base-simple-coco"
-        )
-    except Exception:
+        vitpose_processor = VitPoseImageProcessor.from_pretrained(model_id)
+    except Exception as e:
+        log.warning("ViTPose model load failed: %s", e)
         return None
 
     W, H = pil_image.size
     x1, y1, x2, y2 = person_box_norm
+    # ViTPose expects [x, y, w, h] in pixel coordinates
     coco_box = [x1 * W, y1 * H, (x2 - x1) * W, (y2 - y1) * H]
 
     try:
@@ -180,11 +181,15 @@ def get_person_keypoints(
             kp = results[0][0]
             keypoints = kp["keypoints"].cpu().numpy()
             scores = kp["scores"].cpu().numpy()
+            # Normalize to [0, 1]
             keypoints[:, 0] /= W
             keypoints[:, 1] /= H
+            log.debug("ViTPose: %d keypoints, max_score=%.2f",
+                      len(scores), float(scores.max()))
             return {"keypoints": keypoints, "scores": scores}
+        log.debug("ViTPose: no results returned")
     except Exception as e:
-        log.debug("ViTPose error: %s", e)
+        log.warning("ViTPose inference error: %s", e)
     return None
 
 
