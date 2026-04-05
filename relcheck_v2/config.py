@@ -11,8 +11,10 @@ from __future__ import annotations
 # MODEL IDS
 # ════════════════════════════════════════════════════════════════════════════
 
-LLM_MODEL: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-VLM_MODEL: str = "Qwen/Qwen3-VL-8B-Instruct"
+# LLM_MODEL: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+# VLM_MODEL: str = "Qwen/Qwen3-VL-8B-Instruct"
+LLM_MODEL: str = "Qwen/Qwen3.5-397B-A17B"
+VLM_MODEL: str = "Qwen/Qwen3.5-397B-A17B"
 GDINO_ID: str = "IDEA-Research/grounding-dino-tiny"
 
 # ════════════════════════════════════════════════════════════════════════════

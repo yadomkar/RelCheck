@@ -35,7 +35,7 @@ nltk.download('omw-1.4', quiet=True)
 import sys
 REPO_DIR = '/content/RelCheck'
 if not os.path.exists(os.path.join(REPO_DIR, '.git')):
-    os.system(f'git clone https://github.com/siddhipatil503/RelCheck.git {REPO_DIR}')
+    os.system(f'git clone https://github.com/yadomkar/RelCheck.git {REPO_DIR}')
 else:
     os.system(f'cd {REPO_DIR} && git pull -q')
 sys.path.insert(0, REPO_DIR)
