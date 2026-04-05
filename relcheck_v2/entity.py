@@ -108,6 +108,46 @@ def clean_label(label: str) -> str:
     return normalize(label)
 
 
+def split_compound_label(label: str) -> list[str]:
+    """Split a compound GDino label into individual entity names.
+
+    GroundingDINO's HuggingFace processor can return compound labels
+    when a detection's attention spans across multiple query boundaries
+    in a batch. E.g. "truck a motorcycle" is really two entities.
+
+    This splits on the ' a ' / ' an ' separator pattern that arises
+    from the article-prefixed queries concatenated by the processor.
+
+    Args:
+        label: Cleaned detection label (already lowercased, articles stripped).
+
+    Returns:
+        List of individual entity names. Returns [label] unchanged if
+        no compound pattern is detected.
+    """
+    if not label:
+        return [label]
+
+    # Split on " a " and " an " boundaries (the article remnants from
+    # GDino's cross-query token bleeding)
+    import re
+    parts = re.split(r'\s+a\s+|\s+an\s+', label)
+
+    # Filter out empty strings, trailing punctuation, and very short fragments
+    cleaned = []
+    for p in parts:
+        p = p.strip().rstrip(".,;:")
+        if len(p) >= 2 and p.isalpha():
+            cleaned.append(p)
+        elif len(p) >= 2:
+            # Keep multi-word parts like "pool table" even with spaces
+            words = p.split()
+            if words and all(w.isalpha() for w in words):
+                cleaned.append(p)
+
+    return cleaned if cleaned else [label]
+
+
 # ── Synonym resolution ───────────────────────────────────────────────────
 
 def candidate_synonyms(name: str) -> set[str]:

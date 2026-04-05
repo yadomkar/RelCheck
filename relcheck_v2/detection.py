@@ -15,7 +15,7 @@ from PIL import Image
 from torchvision.ops import box_iou
 
 from .config import GDINO_BOX_THRESHOLD, GDINO_TEXT_THRESHOLD
-from .entity import clean_label, core_noun, candidate_synonyms
+from .entity import clean_label, core_noun, candidate_synonyms, split_compound_label
 from .models import get_gdino, DEVICE
 from .types import Detection, BBox
 from ._logging import log
@@ -47,19 +47,21 @@ def _ensure_detection(item: Detection | tuple[str, float, list[float]]) -> Detec
 def detect_objects(
     image: Image.Image,
     queries: list[str],
-    batch_size: int = 4,
+    batch_size: int = 1,
 ) -> list[Detection]:
-    """Run GroundingDINO on an image with batched queries.
+    """Run GroundingDINO on an image with single-query passes.
 
     Uses the official HuggingFace API:
-      - text as list-of-lists: [["a cat", "a dog"]]
-      - Queries batched (default 4) to avoid attention dilution
+      - text as list-of-lists: [["a cat"]]
+      - One query per forward pass to prevent cross-query token bleeding
+        that produces compound labels like "truck a motorcycle"
       - Articles prefixed for better text encoder performance
 
     Args:
         image: PIL Image to detect objects in.
         queries: List of entity labels to search for.
-        batch_size: Number of queries per forward pass (default 4).
+        batch_size: Number of queries per forward pass (default 1).
+            Set to 1 to prevent compound label artifacts from GDino.
 
     Returns:
         List of Detection objects with normalized bounding box coordinates.
@@ -105,12 +107,16 @@ def detect_objects(
             results["scores"], results[label_key], results["boxes"]
         ):
             x1, y1, x2, y2 = box.tolist()
-            det = Detection(
-                label=clean_label(label),
-                score=score.item(),
-                bbox=[x1 / W, y1 / H, x2 / W, y2 / H],
-            )
-            all_dets.append(det)
+            raw_label = clean_label(label)
+            # Split compound labels from cross-query token bleeding
+            parts = split_compound_label(raw_label)
+            for part in parts:
+                det = Detection(
+                    label=part,
+                    score=score.item(),
+                    bbox=[x1 / W, y1 / H, x2 / W, y2 / H],
+                )
+                all_dets.append(det)
 
     log.debug("Detected %d objects from %d queries", len(all_dets), len(queries))
     return all_dets
