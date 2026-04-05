@@ -134,7 +134,13 @@ Rules (in priority order — higher rules override lower ones):
 6. Do NOT shorten the caption by removing correct information (unless Rule 3 applies).
 7. The output must be fluent, grammatical English — no dangling phrases or partial sentences.
 8. CONSISTENCY: If you replace a word, replace ALL occurrences of that word used in the same sense.
-9. Output the FULL corrected caption ONLY. No explanation, no prefix, no quotes."""
+9. SPATIAL RELATIONS must be complete phrases. NEVER produce broken spatial text like:
+   - "left a book" → WRONG. Write "to the left of a book"
+   - "right the table" → WRONG. Write "to the right of the table"
+   - "below floor" → WRONG. Write "below the floor"
+   Do NOT drop articles or prepositions from spatial phrases.
+10. NEVER duplicate words or phrases. If the original says "life jackets", do NOT write "life jackets life jackets".
+11. Output the FULL corrected caption ONLY. No explanation, no prefix, no quotes."""
 
 
 # ── Missing facts addendum ───────────────────────────────────────────────
