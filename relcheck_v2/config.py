@@ -332,3 +332,15 @@ SKIP_KB_GEOMETRY: bool = True
 """When True, skip the deterministic KB synonym/opposite matching in spatial
 verification and let NLI handle it instead. Useful for ablation: compare
 geometry+NLI vs NLI-only vs geometry-only. Default False preserves existing behavior."""
+
+NLI_USE_VISUAL_DESCRIPTION: bool = False
+"""When True, include VLM visual description sentences as NLI evidence (Phase 3).
+When False, NLI evidence is limited to spatial facts + entity existence only.
+Visual description creates 'mixed' source classifications that reduce NLI accuracy
+from 100% (entity_existence alone) to 68% (mixed). Default False for cleaner signal."""
+
+MAX_CORRECTIONS_PER_BATCH: int = 5
+"""Maximum number of corrections to send in a single batch LLM call.
+When more errors are found, only the highest-confidence ones are sent to the
+batch corrector. Remaining errors fall back to sentence deletion.
+Llama-3.3-70B garbles output when given 6+ simultaneous edits."""

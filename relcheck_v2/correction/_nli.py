@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from ..config import ABSTRACT_ENTITIES, ENTITY_SYNONYMS
+from ..config import ABSTRACT_ENTITIES, ENTITY_SYNONYMS, NLI_USE_VISUAL_DESCRIPTION
 from .._logging import log
 from ..api import llm_call
 from ..types import Triple
@@ -157,7 +157,7 @@ def collect_nli_evidence(
             )
 
     # Phase 3: Visual description sentences mentioning both entities
-    if visual_description:
+    if NLI_USE_VISUAL_DESCRIPTION and visual_description:
         sentences = _parse_visual_description_sentences(visual_description)
         for sentence in sentences:
             sent_lower = sentence.lower()

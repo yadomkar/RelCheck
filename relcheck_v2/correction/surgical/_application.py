@@ -14,7 +14,7 @@ from PIL import Image
 
 from ..._logging import log
 from ...api import llm_call
-from ...config import CORRECTION_LENGTH_RATIO_MIN, CORRECTION_LENGTH_RATIO_MAX
+from ...config import CORRECTION_LENGTH_RATIO_MIN, CORRECTION_LENGTH_RATIO_MAX, MAX_CORRECTIONS_PER_BATCH
 from ...detection import find_best_bbox_from_kb
 from ...prompts import TRIPLE_CORRECT_PROMPT, BATCH_CORRECT_PROMPT
 from ...types import CorrectionError, Confidence
@@ -139,6 +139,18 @@ def apply_batch_correction(
     corrected = caption
     applied: list[dict] = []
 
+    # Cap corrections to avoid garbled output from too many simultaneous edits.
+    # Prioritize HIGH confidence, then MEDIUM. Overflow goes to fallback deletion.
+    overflow_errors: list[CorrectionError] = []
+    if len(errors) > MAX_CORRECTIONS_PER_BATCH:
+        log.debug("[v2] %d errors exceed cap of %d — splitting", len(errors), MAX_CORRECTIONS_PER_BATCH)
+        # Sort: HIGH first, then MEDIUM, then LOW
+        priority = {Confidence.HIGH: 0, Confidence.MEDIUM: 1, Confidence.LOW: 2}
+        sorted_errors = sorted(errors, key=lambda e: priority.get(e.confidence, 2))
+        batch_errors = sorted_errors[:MAX_CORRECTIONS_PER_BATCH]
+        overflow_errors = sorted_errors[MAX_CORRECTIONS_PER_BATCH:]
+        errors = batch_errors
+
     error_lines: list[str] = []
     for i, err in enumerate(errors, 1):
         subj = err.triple.subject
@@ -221,6 +233,13 @@ def apply_batch_correction(
             else:
                 if metrics is not None:
                     metrics.record_fallback_deletion(img_id, used=False, n_deleted=0)
+
+    # Handle overflow errors (beyond the cap) via fallback deletion
+    if overflow_errors:
+        corrected, overflow_applied = _fallback_deletion(corrected, overflow_errors)
+        if overflow_applied:
+            applied.append({"method": "overflow_deletion", "n_errors": len(overflow_errors)})
+            log.debug("[v2] overflow deletion: %d errors handled via sentence removal", len(overflow_errors))
 
     return corrected, applied
 

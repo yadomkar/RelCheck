@@ -97,10 +97,15 @@ def entity_matches(cap_entity: str, kb_entity: str) -> bool:
 
 
 def has_garble(text: str) -> bool:
-    """Detect artifacts from bad character-level insertion.
+    """Detect artifacts from bad LLM correction output.
 
     Checks for known garble patterns that indicate the LLM produced
-    malformed output during correction.
+    malformed output during batch correction. Patterns include:
+    - Spatial relation garbles: "left a", "right the", "below floor"
+    - Repeated phrases: "life jackets life jackets", "helmets helmets"
+    - Action garbles: "holding hat on head", "holding jacket over shoulder"
+    - Pronoun garbles: "controlling the dogs right person"
+    - Nonsense insertions: 30+ char runs, "mat it", etc.
 
     Args:
         text: Caption text to check.
@@ -109,12 +114,48 @@ def has_garble(text: str) -> bool:
         True if garble is detected.
     """
     t = text.lower()
+
+    # Original patterns
     if re.search(r"\w+\s+it\s+up", t):
         return True
     if "mat it" in t:
         return True
     if re.search(r"\S{30,}", t):
         return True
+
+    # Spatial relation garbles — preposition followed by wrong article/word
+    spatial_garbles = [
+        r"\bright the\b",           # "right the table"
+        r"\bleft a\b",              # "left a brown book"
+        r"\bbelow floor\b",         # "below floor" (missing "the")
+        r"\babove the left\b",      # "above the left"
+        r"\bbelow the left\b",      # "below the left side"
+        r"\bin front of front\b",   # "in front of front"
+    ]
+    for pat in spatial_garbles:
+        if re.search(pat, t):
+            return True
+
+    # Repeated phrases (same 2+ word phrase appears twice within 5 words)
+    words = t.split()
+    for i in range(len(words) - 3):
+        bigram = f"{words[i]} {words[i+1]}"
+        for j in range(i + 2, min(i + 6, len(words) - 1)):
+            if f"{words[j]} {words[j+1]}" == bigram:
+                return True
+
+    # Action description garbles from batch corrector
+    action_garbles = [
+        "holding hat on head",
+        "holding jacket over shoulder",
+        "controlling the dogs right",
+        "to the right of right",
+        "to the left of the left",
+    ]
+    for pat in action_garbles:
+        if pat in t:
+            return True
+
     return False
 
 

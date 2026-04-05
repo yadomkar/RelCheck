@@ -47,21 +47,21 @@ def _ensure_detection(item: Detection | tuple[str, float, list[float]]) -> Detec
 def detect_objects(
     image: Image.Image,
     queries: list[str],
-    batch_size: int = 1,
+    batch_size: int = 4,
 ) -> list[Detection]:
-    """Run GroundingDINO on an image with single-query passes.
+    """Run GroundingDINO on an image with batched queries.
 
     Uses the official HuggingFace API:
-      - text as list-of-lists: [["a cat"]]
-      - One query per forward pass to prevent cross-query token bleeding
-        that produces compound labels like "truck a motorcycle"
+      - text as list-of-lists: [["a cat", "a dog"]]
+      - Queries batched (default 4) for throughput
       - Articles prefixed for better text encoder performance
+      - Compound labels from cross-query token bleeding are split
+        into individual entities via split_compound_label()
 
     Args:
         image: PIL Image to detect objects in.
         queries: List of entity labels to search for.
-        batch_size: Number of queries per forward pass (default 1).
-            Set to 1 to prevent compound label artifacts from GDino.
+        batch_size: Number of queries per forward pass (default 4).
 
     Returns:
         List of Detection objects with normalized bounding box coordinates.
