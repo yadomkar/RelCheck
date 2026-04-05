@@ -97,16 +97,16 @@ TRIPLE_CORRECT_PROMPT = """Edit exactly one relationship word or phrase in this 
 
 Caption: "{caption}"
 
-Task: The caption incorrectly describes how {subj} and {obj} relate to each other.
-Find the word or phrase that expresses this relationship between {subj} and {obj}.
-It may not be exactly "{wrong_phrase}" — the caption might use a synonym or different phrasing.
-Replace it with: "{correct_phrase}"
+Task: The relationship between "{subj}" and "{obj}" is wrong.
+The current phrase is "{wrong_phrase}" — replace it with "{correct_phrase}".
 
 Rules:
 - Change ONLY the relationship word/phrase between {subj} and {obj}.
-- Do NOT change any other words, word order, punctuation, or sentence structure.
+- Keep every other word, sentence, and punctuation mark EXACTLY the same.
+- The replacement must be grammatically correct. Use complete spatial phrases:
+  "to the left of" (not "left"), "to the right of" (not "right the"),
+  "in front of" (not "front of"), "on top of" (not "top of").
 - Do NOT add, remove, or reorder any sentences.
-- The corrected caption must be the same length (±10%) as the original.
 - Output the FULL corrected caption only. No explanation, no prefix, no quotes."""
 
 
@@ -141,6 +141,22 @@ Rules (in priority order — higher rules override lower ones):
    Do NOT drop articles or prepositions from spatial phrases.
 10. NEVER duplicate words or phrases. If the original says "life jackets", do NOT write "life jackets life jackets".
 11. Output the FULL corrected caption ONLY. No explanation, no prefix, no quotes."""
+
+
+# ── Grammar cleanup (post-correction) ────────────────────────────────────
+
+CLEANUP_PROMPT = """Fix any grammar errors in this image caption. Do NOT change the meaning or remove any information.
+
+Caption: "{caption}"
+
+Rules:
+- Fix broken phrases like "left a book" → "to the left of a book"
+- Fix repeated words like "helmets helmets" → "helmets"
+- Fix missing articles: "below floor" → "below the floor"
+- Fix dangling phrases that don't make grammatical sense
+- Do NOT add new information
+- Do NOT remove any sentences or facts
+- Output the FULL corrected caption only. No explanation."""
 
 
 # ── Missing facts addendum ───────────────────────────────────────────────

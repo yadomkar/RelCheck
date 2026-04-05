@@ -29,7 +29,7 @@ from .._metrics import (
     MetricsCollector,
 )
 from ._addendum import build_spatial_addendum, add_missing_fact_addendum
-from ._application import apply_batch_correction
+from ._application import apply_batch_correction, apply_sequential_correction
 from ._extraction import extract_triples
 from .._utils import entity_matches
 from ._verify import (
@@ -174,7 +174,7 @@ def correct_long_caption(
     applied: list[dict] = []
 
     if errors:
-        corrected, applied = apply_batch_correction(
+        corrected, applied = apply_sequential_correction(
             img_id, caption, errors, kb, pil_image,
             metrics=metrics,
         )

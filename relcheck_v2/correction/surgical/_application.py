@@ -16,7 +16,7 @@ from ..._logging import log
 from ...api import llm_call
 from ...config import CORRECTION_LENGTH_RATIO_MIN, CORRECTION_LENGTH_RATIO_MAX, MAX_CORRECTIONS_PER_BATCH
 from ...detection import find_best_bbox_from_kb
-from ...prompts import TRIPLE_CORRECT_PROMPT, BATCH_CORRECT_PROMPT
+from ...prompts import TRIPLE_CORRECT_PROMPT, BATCH_CORRECT_PROMPT, CLEANUP_PROMPT
 from ...types import CorrectionError, Confidence
 from .._metrics import (
     GUIDANCE_DELETE_SENTENCE, GUIDANCE_REPLACE_WORD, GUIDANCE_SOFTEN,
@@ -112,7 +112,145 @@ def apply_triple_correction(
     return caption
 
 
-# ── Batch correction ────────────────────────────────────────────────────
+# ── Sequential single-edit correction ────────────────────────────────────
+
+
+def apply_sequential_correction(
+    img_id: str,
+    caption: str,
+    errors: list[CorrectionError],
+    kb: dict,
+    pil_image: Image.Image,
+    metrics: MetricsCollector | None = None,
+) -> tuple[str, list[dict]]:
+    """Apply corrections one at a time using single-edit calls.
+
+    Each error gets its own LLM call with TRIPLE_CORRECT_PROMPT or
+    direct string replacement. This avoids the garble problem from
+    batch correction where multiple simultaneous edits confuse the LLM.
+
+    For DELETE_SENTENCE guidance, uses local sentence segmentation
+    instead of an LLM call.
+
+    Args:
+        img_id: Image identifier (for logging).
+        caption: Original caption.
+        errors: List of confirmed errors.
+        kb: Visual KB dict.
+        pil_image: Full PIL image.
+        metrics: Optional metrics collector for path logging.
+
+    Returns:
+        Tuple of (corrected_caption, applied_methods).
+    """
+    corrected = caption
+    applied: list[dict] = []
+
+    for err in errors:
+        subj = err.triple.subject
+        rel = err.triple.relation
+        obj_ = err.triple.object
+        reason = err.reason
+        err_type = err.triple.rel_type.value
+
+        guidance = build_correction_guidance(
+            subj, rel, obj_, reason, err_type, err.confidence,
+            corrected, kb, pil_image,
+            img_id=img_id, metrics=metrics,
+        )
+        err.guidance = guidance
+
+        if "does NOT exist" in guidance:
+            # Only delete for truly non-existent entities — not for wrong relations
+            sentences = _SEGMENTER.segment(corrected)
+            cn_s = core_noun(subj).lower()
+            cn_o = core_noun(obj_).lower()
+            kept = []
+            deleted = False
+            for sent in sentences:
+                sl = sent.lower()
+                if not deleted and cn_s in sl and cn_o in sl:
+                    deleted = True
+                    continue
+                kept.append(sent)
+            if deleted and kept and len(" ".join(kept).split()) >= 10:
+                corrected = " ".join(kept).strip()
+                applied.append({"method": "sentence_deletion", "claim": err.triple.claim})
+        elif "COMPLETELY DELETE" in guidance:
+            # Wrong relation but no correct one found — replace with "near" instead of deleting
+            corrected = apply_triple_correction(
+                corrected, rel, "near", subj=subj, obj_=obj_,
+            )
+            applied.append({"method": "single_edit_fallback", "claim": err.triple.claim,
+                            "old": rel, "new": "near"})
+        else:
+            # Word replacement — use apply_triple_correction (single edit)
+            correct_rel = extract_correct_rel_from_reason(reason)
+            if not correct_rel:
+                # Try to extract from guidance text
+                m = re.search(r"rewrite it as '([^']+)'", guidance)
+                if m:
+                    full_rewrite = m.group(1)
+                    # Extract just the relation part
+                    if subj.lower() in full_rewrite.lower() and obj_.lower() in full_rewrite.lower():
+                        start = full_rewrite.lower().find(core_noun(subj).lower())
+                        end = full_rewrite.lower().find(core_noun(obj_).lower())
+                        if start >= 0 and end > start:
+                            correct_rel = full_rewrite[start + len(core_noun(subj)):end].strip()
+
+            if correct_rel and correct_rel.strip() != rel.strip():
+                corrected = apply_triple_correction(
+                    corrected, rel, correct_rel, subj=subj, obj_=obj_,
+                )
+                applied.append({"method": "single_edit", "claim": err.triple.claim,
+                                "old": rel, "new": correct_rel})
+            else:
+                # No correct relation found — try generic "near" replacement
+                corrected = apply_triple_correction(
+                    corrected, rel, "near", subj=subj, obj_=obj_,
+                )
+                applied.append({"method": "single_edit_fallback", "claim": err.triple.claim,
+                                "old": rel, "new": "near"})
+
+    # ── Final grammar cleanup pass ──
+    # Catch any garbles introduced by string replacement or LLM edits
+    if corrected != caption and has_garble(corrected):
+        log.debug("[%s] Garble detected after sequential correction — running cleanup", img_id)
+        cleanup_result = llm_call(
+            [{"role": "user", "content": CLEANUP_PROMPT.format(caption=corrected)}],
+            max_tokens=int(len(corrected.split()) * 1.5 + 20),
+        )
+        if cleanup_result:
+            cleaned = cleanup_result.strip().strip('"').strip("'")
+            # Accept cleanup only if it doesn't drastically change length
+            ratio = len(cleaned) / max(len(corrected), 1)
+            if 0.80 <= ratio <= 1.20 and len(cleaned.split()) >= 10:
+                corrected = cleaned
+                applied.append({"method": "grammar_cleanup"})
+
+    # Record metrics
+    if metrics is not None:
+        # Record batch eval as "sequential" mode
+        orig_len = len(caption)
+        corr_len = len(corrected)
+        ratio = corr_len / max(orig_len, 1)
+        metrics.record_batch_eval(
+            img_id,
+            length_ratio=round(ratio, 4),
+            garble_detected=False,
+            too_short=len(corrected.split()) < 5,
+            too_compressed=False,
+            accepted=True,
+        )
+        metrics.record_caption_snapshot(
+            img_id, STAGE_BATCH_CANDIDATE, corrected, accepted=True,
+        )
+        metrics.record_fallback_deletion(img_id, used=False, n_deleted=0)
+
+    return corrected, applied
+
+
+# ── Batch correction (kept for ablation) ────────────────────────────────
 
 
 def apply_batch_correction(
@@ -150,6 +288,7 @@ def apply_batch_correction(
         batch_errors = sorted_errors[:MAX_CORRECTIONS_PER_BATCH]
         overflow_errors = sorted_errors[MAX_CORRECTIONS_PER_BATCH:]
         errors = batch_errors
+        log.info("[%s] Correction cap: %d batch + %d overflow", img_id, len(errors), len(overflow_errors))
 
     error_lines: list[str] = []
     for i, err in enumerate(errors, 1):
@@ -248,7 +387,11 @@ def _fallback_deletion(
     caption: str,
     errors: list[CorrectionError],
 ) -> tuple[str, bool]:
-    """Fallback: delete sentences containing confirmed errors.
+    """Fallback: delete only the specific sentence containing each error.
+
+    Uses sentence segmentation to surgically remove just the sentences
+    that contain hallucinated claims, preserving all other content.
+    Caps deletion at 50% of total sentences to prevent gutting the caption.
 
     Args:
         caption: Current caption text.
@@ -257,30 +400,44 @@ def _fallback_deletion(
     Returns:
         Tuple of (corrected_caption, was_applied).
     """
-    delete_claims = [e.triple.claim for e in errors]
-    delete_prompt = (
-        f'Caption: "{caption}"\n\n'
-        f"These claims are DEFINITELY WRONG and must be COMPLETELY DELETED:\n"
-    )
-    for claim in delete_claims:
-        delete_prompt += f"  - {claim}\n"
-    delete_prompt += (
-        f"\nInstructions:\n"
-        f"1. Find each false claim in the caption\n"
-        f"2. COMPLETELY DELETE the entire sentence containing it\n"
-        f"3. Keep all other sentences unchanged\n"
-        f"4. Output ONLY the corrected caption with no explanation"
-    )
+    sentences = _SEGMENTER.segment(caption)
+    if not sentences:
+        return caption, False
 
-    result = llm_call(
-        [{"role": "user", "content": delete_prompt}],
-        max_tokens=int(len(caption.split()) * 2),
-    )
+    delete_claims = {e.triple.claim.lower() for e in errors}
+    # Also collect individual subject/object nouns for fuzzy matching
+    delete_nouns = set()
+    for e in errors:
+        delete_nouns.add(core_noun(e.triple.subject))
+        delete_nouns.add(core_noun(e.triple.object))
 
-    if result:
-        result = result.strip().strip('"').strip("'")
-        if result and result != caption and len(result.split()) >= 3:
-            return result, True
+    to_delete: set[int] = set()
+    for i, sent in enumerate(sentences):
+        sent_lower = sent.lower()
+        for claim in delete_claims:
+            # Check if claim words appear in this sentence
+            claim_words = claim.split()
+            if len(claim_words) >= 2:
+                subj_word = claim_words[0]
+                obj_word = claim_words[-1]
+                if subj_word in sent_lower and obj_word in sent_lower:
+                    to_delete.add(i)
+                    break
+
+    # Cap: never delete more than half the sentences
+    max_deletions = max(len(sentences) // 2, 1)
+    if len(to_delete) > max_deletions:
+        # Keep only the first max_deletions (by sentence order)
+        to_delete = set(sorted(to_delete)[:max_deletions])
+
+    if not to_delete:
+        return caption, False
+
+    kept = [s for i, s in enumerate(sentences) if i not in to_delete]
+    result = " ".join(kept).strip()
+
+    if result and len(result.split()) >= 10:
+        return result, True
 
     return caption, False
 
