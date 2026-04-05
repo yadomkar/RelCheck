@@ -296,9 +296,10 @@ CAPTIONER_MODELS: dict[str, str | None] = {
 }
 
 DESCRIBE_PROMPT: str = (
-    "Describe this image in detail. Include all objects, "
-    "their spatial positions relative to each other, any actions "
-    "or interactions taking place, and notable attributes like colors and sizes."
+    "Describe this image in detail using 5-8 sentences. "
+    "For every object, state its exact spatial position relative to other objects "
+    "(left of, right of, above, below, in front of, behind, on top of, next to). "
+    "Describe what each person or animal is doing and what they are interacting with."
 )
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -306,11 +307,14 @@ DESCRIBE_PROMPT: str = (
 # ════════════════════════════════════════════════════════════════════════════
 
 RPOPE_PROMPT_TMPL: str = (
+    "You are evaluating whether an image caption accurately describes "
+    "spatial relationships, actions, and attributes between objects.\n"
     "Based ONLY on this description, answer the question with Yes or No.\n\n"
     'Description: "CAPTION_PLACEHOLDER"\n'
     "Question: QUESTION_PLACEHOLDER\n\n"
     "Answer ONLY Yes or No."
 )
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # GOOGLE DRIVE PATHS (Colab defaults)
@@ -339,7 +343,7 @@ When False, NLI evidence is limited to spatial facts + entity existence only.
 Visual description creates 'mixed' source classifications that reduce NLI accuracy
 from 100% (entity_existence alone) to 68% (mixed). Default False for cleaner signal."""
 
-MAX_CORRECTIONS_PER_BATCH: int = 5
+MAX_CORRECTIONS_PER_BATCH: int = 99
 """Maximum number of corrections to send in a single batch LLM call.
 When more errors are found, only the highest-confidence ones are sent to the
 batch corrector. Remaining errors fall back to sentence deletion.
