@@ -97,7 +97,7 @@ def entity_matches(cap_entity: str, kb_entity: str) -> bool:
 
 
 def has_garble(text: str) -> bool:
-    """Detect artifacts from bad character-level insertion."""
+    """Detect artifacts from bad LLM correction output."""
     t = text.lower()
     if re.search(r"\w+\s+it\s+up", t):
         return True
@@ -105,6 +105,33 @@ def has_garble(text: str) -> bool:
         return True
     if re.search(r"\S{30,}", t):
         return True
+    spatial_garbles = [
+        r"\bright the\b",
+        r"\bleft a\b",
+        r"\bbelow floor\b",
+        r"\babove the left\b",
+        r"\bbelow the left\b",
+        r"\bin front of front\b",
+    ]
+    for pat in spatial_garbles:
+        if re.search(pat, t):
+            return True
+    words = t.split()
+    for i in range(len(words) - 3):
+        bigram = f"{words[i]} {words[i+1]}"
+        for j in range(i + 2, min(i + 6, len(words) - 1)):
+            if f"{words[j]} {words[j+1]}" == bigram:
+                return True
+    action_garbles = [
+        "holding hat on head",
+        "holding jacket over shoulder",
+        "controlling the dogs right",
+        "to the right of right",
+        "to the left of the left",
+    ]
+    for pat in action_garbles:
+        if pat in t:
+            return True
     return False
 
 

@@ -346,10 +346,26 @@ def apply_batch_correction(
         accepted = (
             ratio <= CORRECTION_LENGTH_RATIO_MAX
             and candidate != caption
-            and not garble
             and not is_too_short
             and not too_compressed
         )
+
+        # If garble detected, try cleanup LLM before rejecting
+        if garble and accepted:
+            log.debug("[v2] garble detected — attempting cleanup")
+            cleanup_result = llm_call(
+                [{"role": "user", "content": CLEANUP_PROMPT.format(caption=candidate)}],
+                max_tokens=int(len(candidate.split()) * 1.5 + 20),
+            )
+            if cleanup_result:
+                cleaned = cleanup_result.strip().strip('"').strip("'")
+                clean_ratio = len(cleaned) / max(len(caption), 1)
+                if 0.70 <= clean_ratio <= 1.30 and len(cleaned.split()) >= 10 and not has_garble(cleaned):
+                    candidate = cleaned
+                    garble = False
+                    log.debug("[v2] cleanup succeeded — garble removed")
+                else:
+                    log.debug("[v2] cleanup failed — still garbled or bad ratio")
 
         if metrics is not None:
             metrics.record_batch_eval(
