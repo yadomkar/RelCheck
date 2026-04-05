@@ -24,7 +24,7 @@ from ...types import (
 )
 from .._metrics import (
     STAGE_BATCH_CANDIDATE, STAGE_FALLBACK_DELETION,
-    STAGE_FINAL, STAGE_MISSING_FACT_ADDENDUM,
+    STAGE_FINAL, STAGE_INPUT, STAGE_MISSING_FACT_ADDENDUM,
     STAGE_POST_VERIFY_REVERT, STAGE_SPATIAL_ADDENDUM,
     MetricsCollector,
 )
@@ -38,6 +38,7 @@ from ._verify import (
     verify_action_attribute_triple,
 )
 from .._vqa import _parse_spatial_facts
+from .._nli import nli_check_triples_batch, NLIResult
 
 __all__ = ["correct_long_caption"]
 
@@ -50,6 +51,7 @@ def correct_long_caption(
     cross_captions: dict[str, str] | None = None,
     include_addendum: bool = True,
     metrics: MetricsCollector | None = None,
+    enable_nli: bool = False,
 ) -> CorrectionResult:
     """Per-triple verification and surgical correction for detailed captions.
 
@@ -82,6 +84,7 @@ def correct_long_caption(
 
     # Record KB content
     if metrics is not None:
+        metrics.record_caption_snapshot(img_id, STAGE_INPUT, caption)
         spatial_facts_list = kb.get("spatial_facts", [])
         hard_facts_list = kb.get("hard_facts", [])
         visual_desc = kb.get("visual_description", "") or ""
@@ -131,21 +134,35 @@ def correct_long_caption(
     geo_contras = check_spatial_contradictions(caption, spatial_facts)
     geo_set = {c.lower() for c in geo_contras}
 
+    # ── Step 1.5: Batch NLI pre-filter (when enabled) ──
+    nli_results: list[NLIResult] | None = None
+    if enable_nli and triples:
+        nli_results = nli_check_triples_batch(
+            triples,
+            spatial_facts=spatial_facts,
+            visual_description=kb.get("visual_description", "") or "",
+            hard_facts=kb.get("hard_facts", []),
+        )
+
     errors: list[CorrectionError] = []
     all_checks: list[VerificationResult] = []
 
-    for triple in triples:
+    for i, triple in enumerate(triples):
+        nli_result = nli_results[i] if nli_results else None
+
         if triple.rel_type == RelationType.SPATIAL:
             verify_spatial_triple(
                 triple, kb, pil_image, spatial_facts, geo_set,
                 errors, all_checks, img_id,
                 metrics=metrics,
+                nli_result=nli_result,
             )
         else:
             verify_action_attribute_triple(
                 triple, kb, pil_image, cross_captions,
                 errors, all_checks, img_id,
                 metrics=metrics,
+                nli_result=nli_result,
             )
 
     # ── Step 3: Apply corrections ──

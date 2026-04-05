@@ -544,6 +544,9 @@ class MetricsCollector:
         # ── Geometry usage ──────────────────────────────────────────────
         geometry_usage = self._compute_geometry_usage(logs)
 
+        # ── NLI usage ───────────────────────────────────────────────────
+        nli_usage = self._compute_nli_usage(logs)
+
         return {
             "total_images": n,
             "dispatch_counts": dispatch_counts,
@@ -561,6 +564,7 @@ class MetricsCollector:
             "path_effectiveness": path_effectiveness,
             "kb_usage": kb_usage,
             "geometry_usage": geometry_usage,
+            "nli_usage": nli_usage,
         }
 
     # ── Summary helpers (private) ───────────────────────────────────────
@@ -612,6 +616,19 @@ class MetricsCollector:
                 "geo_violated": 0,
                 "family_counts": {},
                 "geo_vqa_agreement_rate": 0.0,
+            },
+            "nli_usage": {
+                "total_checks": 0,
+                "support_count": 0,
+                "contradict_count": 0,
+                "neutral_count": 0,
+                "vqa_calls_saved": 0,
+                "evidence_hit_rate": 0.0,
+                "batch_calls_made": 0,
+                "entity_existence_flags": 0,
+                "contradict_high_geometry": 0,
+                "contradict_high_entity": 0,
+                "contradict_low_visual": 0,
             },
         }
 
@@ -808,6 +825,83 @@ class MetricsCollector:
             "geo_vqa_agreement_rate": _safe_rate(geo_vqa_agree, geo_vqa_total),
         }
 
+    @staticmethod
+    def _compute_nli_usage(logs: list[dict[str, Any]]) -> dict[str, Any]:
+        """Compute aggregate NLI pre-filter usage statistics.
+
+        Args:
+            logs: List of PathLog dicts.
+
+        Returns:
+            Dict with NLI check counts, verdict breakdown, VQA savings,
+            and tiered CONTRADICT counts.
+        """
+        total_checks = 0
+        support_count = 0
+        contradict_count = 0
+        neutral_count = 0
+        vqa_saved = 0
+        evidence_hit = 0
+        entity_existence_flags = 0
+        contradict_high_geometry = 0
+        contradict_high_entity = 0
+        contradict_low_visual = 0
+
+        for rec in logs:
+            for entries in (rec.get("spatial_verifications", []),
+                            rec.get("action_verifications", [])):
+                for entry in entries:
+                    nli_v = entry.get("nli_verdict")
+                    if nli_v is None:
+                        continue
+                    total_checks += 1
+                    if nli_v == "SUPPORT":
+                        support_count += 1
+                    elif nli_v == "CONTRADICT":
+                        contradict_count += 1
+                    else:
+                        neutral_count += 1
+
+                    if entry.get("nli_skipped_vqa"):
+                        vqa_saved += 1
+                    if entry.get("nli_evidence_count", 0) > 0:
+                        evidence_hit += 1
+                    if entry.get("nli_evidence_source") == "entity_existence":
+                        entity_existence_flags += 1
+
+                    tier = entry.get("nli_contradict_tier")
+                    if tier == "high_geometry":
+                        contradict_high_geometry += 1
+                    elif tier == "high_entity":
+                        contradict_high_entity += 1
+                    elif tier == "low_visual":
+                        contradict_low_visual += 1
+
+        # batch_calls_made: count images that had at least one NLI check
+        batch_calls = sum(
+            1 for rec in logs
+            if any(
+                e.get("nli_verdict") is not None
+                for entries in (rec.get("spatial_verifications", []),
+                                rec.get("action_verifications", []))
+                for e in entries
+            )
+        )
+
+        return {
+            "total_checks": total_checks,
+            "support_count": support_count,
+            "contradict_count": contradict_count,
+            "neutral_count": neutral_count,
+            "vqa_calls_saved": vqa_saved,
+            "evidence_hit_rate": _safe_rate(evidence_hit, total_checks),
+            "batch_calls_made": batch_calls,
+            "entity_existence_flags": entity_existence_flags,
+            "contradict_high_geometry": contradict_high_geometry,
+            "contradict_high_entity": contradict_high_entity,
+            "contradict_low_visual": contradict_low_visual,
+        }
+
     # ── Human-readable output ───────────────────────────────────────────
 
     def print_summary(self) -> None:
@@ -912,6 +1006,24 @@ class MetricsCollector:
                 print(f"    Family breakdown:")
                 for fam, cnt in sorted(gu["family_counts"].items(), key=lambda x: -x[1]):
                     print(f"      {fam:<22} {cnt:>5}")
+            print()
+
+        # NLI usage
+        nu = s.get("nli_usage", {})
+        if nu.get("total_checks", 0) > 0:
+            print("  NLI Pre-Filter Usage")
+            print(f"    Total NLI checks:      {nu['total_checks']}")
+            print(f"    SUPPORT:               {nu['support_count']}")
+            print(f"    CONTRADICT:            {nu['contradict_count']}")
+            print(f"    NEUTRAL:               {nu['neutral_count']}")
+            print(f"    VQA calls saved:       {nu['vqa_calls_saved']}")
+            print(f"    Evidence hit rate:      {nu['evidence_hit_rate']:.1%}")
+            print(f"    Batch LLM calls:       {nu['batch_calls_made']}")
+            print(f"    Entity existence flags: {nu['entity_existence_flags']}")
+            print(f"    CONTRADICT tiers:")
+            print(f"      High (geometry):     {nu['contradict_high_geometry']}")
+            print(f"      High (entity):       {nu['contradict_high_entity']}")
+            print(f"      Low  (visual):       {nu['contradict_low_visual']}")
             print()
 
         print("=" * 60)

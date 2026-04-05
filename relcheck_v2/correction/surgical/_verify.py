@@ -25,6 +25,7 @@ from .._geometry import (
 )
 from .._metrics import MetricsCollector
 from .._utils import core_noun, entity_matches, normalize_entity
+from .._nli import NLIResult, NLIVerdict, EvidenceSource
 from .._vqa import (
     check_entity_exists_vqa, verify_action_triple,
     query_correct_spatial_relation, _parse_spatial_facts,
@@ -112,6 +113,7 @@ def verify_spatial_triple(
     all_checks: list[VerificationResult],
     img_id: str,
     metrics: MetricsCollector | None = None,
+    nli_result: NLIResult | None = None,
 ) -> None:
     """Verify a SPATIAL triple and append results to errors/all_checks.
 
@@ -176,6 +178,42 @@ def verify_spatial_triple(
     # Fallback: check entity existence + VQA
     kb_bbox_found_subject = find_best_bbox_from_kb(subj, kb) is not None
     kb_bbox_found_object = find_best_bbox_from_kb(obj, kb) is not None
+
+    # ── NLI pre-filter (when verdict still UNKNOWN) ──
+    nli_skipped_vqa = False
+    nli_contradict_tier: str | None = None
+    if verdict == Verdict.UNKNOWN and nli_result is not None:
+        nli_evidence_count = len(nli_result.evidence_used)
+
+        if nli_result.verdict == NLIVerdict.SUPPORT:
+            verdict = Verdict.CORRECT
+            confidence = Confidence.MEDIUM
+            reason = f"NLI: KB evidence supports claim ({nli_evidence_count} facts)"
+            nli_skipped_vqa = True
+
+        elif nli_result.verdict == NLIVerdict.CONTRADICT:
+            if nli_result.evidence_source == EvidenceSource.SPATIAL_FACT:
+                verdict = Verdict.INCORRECT
+                confidence = Confidence.HIGH
+                reason = (
+                    f"NLI: geometry-backed KB contradiction "
+                    f"({nli_evidence_count} spatial facts) — HIGH confidence"
+                )
+                nli_skipped_vqa = True
+                nli_contradict_tier = "high_geometry"
+            elif nli_result.evidence_source == EvidenceSource.ENTITY_EXISTENCE:
+                verdict = Verdict.INCORRECT
+                confidence = Confidence.HIGH
+                reason = (
+                    f"NLI: entity not detected by object detector "
+                    f"({nli_evidence_count} facts) — HIGH confidence"
+                )
+                nli_skipped_vqa = True
+                nli_contradict_tier = "high_entity"
+            else:
+                # Visual description / mixed → soft, pass to VQA
+                nli_contradict_tier = "low_visual"
+                # Don't override verdict — VQA proceeds below
 
     if verdict == Verdict.UNKNOWN:
         # Skip object-existence check for abstract/positional terms
@@ -250,6 +288,11 @@ def verify_spatial_triple(
             "kb_bbox_found_subject": kb_bbox_found_subject,
             "kb_bbox_found_object": kb_bbox_found_object,
             "kb_provided_correct_rel": kb_provided_correct_rel,
+            "nli_verdict": nli_result.verdict.value if nli_result else None,
+            "nli_evidence_count": len(nli_result.evidence_used) if nli_result else 0,
+            "nli_evidence_source": nli_result.evidence_source.value if nli_result else None,
+            "nli_skipped_vqa": nli_skipped_vqa,
+            "nli_contradict_tier": nli_contradict_tier,
         })
 
 
@@ -265,6 +308,7 @@ def verify_action_attribute_triple(
     all_checks: list[VerificationResult],
     img_id: str,
     metrics: MetricsCollector | None = None,
+    nli_result: NLIResult | None = None,
 ) -> None:
     """Verify an ACTION or ATTRIBUTE triple and append results.
 
@@ -290,6 +334,8 @@ def verify_action_attribute_triple(
     vqa_total = 0
     vqa_contrastive_no = False
     vqa_decision_category = "inconclusive"
+    nli_skipped_vqa = False
+    nli_contradict_tier: str | None = None
 
     # KB bbox tracking
     kb_bbox_found_subject = find_best_bbox_from_kb(subj, kb) is not None
@@ -360,8 +406,108 @@ def verify_action_attribute_triple(
                 "kb_bbox_found_object": kb_bbox_found_object,
                 "used_crop_vqa": used_crop_vqa,
                 "geo_check_possible": geo_check_possible,
+                "nli_verdict": nli_result.verdict.value if nli_result else None,
+                "nli_evidence_count": len(nli_result.evidence_used) if nli_result else 0,
+                "nli_evidence_source": nli_result.evidence_source.value if nli_result else None,
+                "nli_skipped_vqa": False,
+                "nli_contradict_tier": None,
             })
         return
+
+    # ── NLI pre-filter (when not consensus-confirmed) ──
+    if nli_result is not None:
+        nli_evidence_count = len(nli_result.evidence_used)
+
+        if nli_result.verdict == NLIVerdict.SUPPORT:
+            verdict = Verdict.CORRECT
+            confidence = Confidence.MEDIUM
+            reason = f"NLI: KB evidence supports claim ({nli_evidence_count} facts)"
+            nli_skipped_vqa = True
+            all_checks.append(VerificationResult(
+                triple=triple, verdict=verdict, confidence=confidence,
+                reason=reason, evidence_source="nli_kb",
+            ))
+            if metrics is not None:
+                metrics.record_action_verification(img_id, {
+                    "claim": triple.claim,
+                    "rel_type": triple.rel_type.value,
+                    "action_geo_family": geo_family,
+                    "geo_prereq_result": geo_prereq,
+                    "keypoints_loaded": keypoints_loaded,
+                    "consensus_confirmed": consensus_confirmed,
+                    "vqa_yes_votes": 0,
+                    "vqa_no_votes": 0,
+                    "vqa_total": 0,
+                    "vqa_contrastive_no": False,
+                    "vqa_decision_category": "nli_support",
+                    "verdict": verdict.value,
+                    "confidence": confidence.value,
+                    "evidence_source": "nli_kb",
+                    "kb_bbox_found_subject": kb_bbox_found_subject,
+                    "kb_bbox_found_object": kb_bbox_found_object,
+                    "used_crop_vqa": False,
+                    "geo_check_possible": geo_check_possible,
+                    "nli_verdict": nli_result.verdict.value,
+                    "nli_evidence_count": len(nli_result.evidence_used),
+                    "nli_evidence_source": nli_result.evidence_source.value,
+                    "nli_skipped_vqa": True,
+                    "nli_contradict_tier": None,
+                })
+            return
+
+        elif nli_result.verdict == NLIVerdict.CONTRADICT:
+            if nli_result.evidence_source in (
+                EvidenceSource.SPATIAL_FACT,
+                EvidenceSource.ENTITY_EXISTENCE,
+            ):
+                verdict = Verdict.INCORRECT
+                confidence = Confidence.HIGH
+                reason = (
+                    f"NLI: {nli_result.evidence_source.value} contradiction "
+                    f"({nli_evidence_count} facts) — HIGH confidence"
+                )
+                nli_skipped_vqa = True
+                nli_contradict_tier = (
+                    "high_geometry" if nli_result.evidence_source == EvidenceSource.SPATIAL_FACT
+                    else "high_entity"
+                )
+                all_checks.append(VerificationResult(
+                    triple=triple, verdict=verdict, confidence=confidence,
+                    reason=reason, evidence_source="nli_kb",
+                ))
+                errors.append(CorrectionError(
+                    triple=triple, reason=reason, confidence=confidence,
+                ))
+                if metrics is not None:
+                    metrics.record_action_verification(img_id, {
+                        "claim": triple.claim,
+                        "rel_type": triple.rel_type.value,
+                        "action_geo_family": geo_family,
+                        "geo_prereq_result": geo_prereq,
+                        "keypoints_loaded": keypoints_loaded,
+                        "consensus_confirmed": consensus_confirmed,
+                        "vqa_yes_votes": 0,
+                        "vqa_no_votes": 0,
+                        "vqa_total": 0,
+                        "vqa_contrastive_no": False,
+                        "vqa_decision_category": "nli_contradict_hard",
+                        "verdict": verdict.value,
+                        "confidence": confidence.value,
+                        "evidence_source": "nli_kb",
+                        "kb_bbox_found_subject": kb_bbox_found_subject,
+                        "kb_bbox_found_object": kb_bbox_found_object,
+                        "used_crop_vqa": False,
+                        "geo_check_possible": geo_check_possible,
+                        "nli_verdict": nli_result.verdict.value,
+                        "nli_evidence_count": len(nli_result.evidence_used),
+                        "nli_evidence_source": nli_result.evidence_source.value,
+                        "nli_skipped_vqa": True,
+                        "nli_contradict_tier": nli_contradict_tier,
+                    })
+                return
+            else:
+                # Soft evidence → pass contradiction context to VQA
+                nli_contradict_tier = "low_visual"
 
     # VQA verification (with geometry-grounded prompting)
     verified, v_yes, v_no, v_total, v_contrastive_no = verify_action_triple(
@@ -442,4 +588,9 @@ def verify_action_attribute_triple(
             "kb_bbox_found_object": kb_bbox_found_object,
             "used_crop_vqa": used_crop_vqa,
             "geo_check_possible": geo_check_possible,
+            "nli_verdict": nli_result.verdict.value if nli_result else None,
+            "nli_evidence_count": len(nli_result.evidence_used) if nli_result else 0,
+            "nli_evidence_source": nli_result.evidence_source.value if nli_result else None,
+            "nli_skipped_vqa": nli_skipped_vqa,
+            "nli_contradict_tier": nli_contradict_tier,
         })

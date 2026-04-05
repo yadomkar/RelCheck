@@ -318,3 +318,12 @@ RPOPE_PROMPT_TMPL: str = (
 
 DRIVE_IMAGES_DIR: str = "/content/drive/MyDrive/RelCheck_Data/images"
 RBENCH_PATH: str = "/content/drive/MyDrive/RelCheck_Data/rbench_data.json"
+
+# ════════════════════════════════════════════════════════════════════════════
+# NLI PRE-FILTER
+# ════════════════════════════════════════════════════════════════════════════
+
+ENABLE_NLI: bool = True
+"""Master switch for the NLI-based KB verification pre-filter.
+When False (default), the pipeline behaves identically to the non-NLI version.
+When True, a batch NLI entailment check runs after triple extraction."""
