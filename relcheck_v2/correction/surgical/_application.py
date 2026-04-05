@@ -334,8 +334,10 @@ def build_correction_guidance(
             guidance_text = (
                 f"The spatial relation '{rel}' in '{claim_str}' is WRONG "
                 f"(deterministic bbox geometry). "
-                f"Replace ONLY the word/phrase '{rel}' with '{correct_rel}'. "
-                f"Keep '{subj}' and '{obj_}' and all other text unchanged."
+                f"Find the phrase '{subj} {rel} {obj_}' and rewrite it as "
+                f"'{subj} {correct_rel} {obj_}'. "
+                f"Keep the rest of the sentence unchanged. "
+                f"Make sure the result is grammatically correct English."
             )
         else:
             guidance_type = GUIDANCE_DELETE_SENTENCE
@@ -371,9 +373,10 @@ def build_correction_guidance(
                 guidance_text = (
                     f"The relation '{rel}' in '{claim_str}' is DEFINITELY "
                     f"WRONG (VQA HIGH confidence). "
-                    f"Replace ONLY the word/phrase '{rel}' with '{correct_rel}'. "
-                    f"Keep '{subj}' and '{obj_}' and all other text unchanged. "
-                    f"Do NOT add or remove any other words."
+                    f"Find the phrase '{subj} {rel} {obj_}' and rewrite it as "
+                    f"'{subj} {correct_rel} {obj_}'. "
+                    f"Keep the rest of the sentence unchanged. "
+                    f"Make sure the result is grammatically correct English."
                 )
             else:
                 # Check standalone-ness
@@ -398,8 +401,9 @@ def build_correction_guidance(
                     guidance_text = (
                         f"The relation '{rel}' in '{claim_str}' is DEFINITELY "
                         f"WRONG (VQA HIGH confidence) but the correct relation "
-                        f"is unclear. Replace ONLY '{rel}' with 'near' to remove "
-                        f"the false claim while keeping '{subj}' and '{obj_}'."
+                        f"is unclear. Find the phrase '{subj} {rel} {obj_}' and "
+                        f"rewrite it as '{subj} near {obj_}'. "
+                        f"Make sure the result is grammatically correct English."
                     )
     else:
         guidance_type = GUIDANCE_SOFTEN

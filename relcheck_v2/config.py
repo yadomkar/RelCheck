@@ -327,3 +327,8 @@ ENABLE_NLI: bool = True
 """Master switch for the NLI-based KB verification pre-filter.
 When False (default), the pipeline behaves identically to the non-NLI version.
 When True, a batch NLI entailment check runs after triple extraction."""
+
+SKIP_KB_GEOMETRY: bool = True
+"""When True, skip the deterministic KB synonym/opposite matching in spatial
+verification and let NLI handle it instead. Useful for ablation: compare
+geometry+NLI vs NLI-only vs geometry-only. Default False preserves existing behavior."""

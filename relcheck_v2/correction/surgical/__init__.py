@@ -16,7 +16,7 @@ from __future__ import annotations
 from PIL import Image
 
 from ..._logging import log
-from ...config import SPATIAL_OPPOSITES
+from ...config import ENABLE_NLI, SPATIAL_OPPOSITES
 from ...entity import levenshtein_distance
 from ...types import (
     CorrectionMode, CorrectionResult, CorrectionError,
@@ -51,7 +51,7 @@ def correct_long_caption(
     cross_captions: dict[str, str] | None = None,
     include_addendum: bool = True,
     metrics: MetricsCollector | None = None,
-    enable_nli: bool = False,
+    enable_nli: bool = ENABLE_NLI,
 ) -> CorrectionResult:
     """Per-triple verification and surgical correction for detailed captions.
 
@@ -131,8 +131,12 @@ def correct_long_caption(
 
     # ── Step 2: Verify each triple ──
     spatial_facts = kb.get("spatial_facts", [])
-    geo_contras = check_spatial_contradictions(caption, spatial_facts)
-    geo_set = {c.lower() for c in geo_contras}
+    from ...config import SKIP_KB_GEOMETRY
+    if not SKIP_KB_GEOMETRY:
+        geo_contras = check_spatial_contradictions(caption, spatial_facts)
+        geo_set = {c.lower() for c in geo_contras}
+    else:
+        geo_set = set()
 
     # ── Step 1.5: Batch NLI pre-filter (when enabled) ──
     nli_results: list[NLIResult] | None = None

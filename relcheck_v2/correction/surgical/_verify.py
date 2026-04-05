@@ -12,7 +12,7 @@ from __future__ import annotations
 from PIL import Image
 
 from ..._logging import log
-from ...config import ABSTRACT_ENTITIES, SPATIAL_OPPOSITES
+from ...config import ABSTRACT_ENTITIES, SPATIAL_OPPOSITES, SKIP_KB_GEOMETRY
 from ...detection import find_best_bbox_from_kb
 from ...spatial import SPATIAL_TRIPLE_RE
 from ...types import (
@@ -144,36 +144,37 @@ def verify_spatial_triple(
     kb_spatial_triples_parsed = len(kb_triples)
     verdict, confidence, reason = Verdict.UNKNOWN, Confidence.LOW, "no geometry available"
 
-    for kb_s, kb_r, kb_o in kb_triples:
-        if entity_matches(subj, kb_s) and entity_matches(obj, kb_o):
-            if kb_r.lower() in spatial_synonyms(rel):
-                verdict, confidence, reason = Verdict.CORRECT, Confidence.HIGH, "geometry confirms"
-                kb_synonym_match = True
-                kb_provided_correct_rel = True
-                break
-            opp = SPATIAL_OPPOSITES.get(rel)
-            if opp and kb_r == opp:
-                verdict, confidence, reason = Verdict.INCORRECT, Confidence.HIGH, f"geometry shows {kb_r}"
-                kb_opposite_match = True
-                break
+    if not SKIP_KB_GEOMETRY:
+        for kb_s, kb_r, kb_o in kb_triples:
+            if entity_matches(subj, kb_s) and entity_matches(obj, kb_o):
+                if kb_r.lower() in spatial_synonyms(rel):
+                    verdict, confidence, reason = Verdict.CORRECT, Confidence.HIGH, "geometry confirms"
+                    kb_synonym_match = True
+                    kb_provided_correct_rel = True
+                    break
+                opp = SPATIAL_OPPOSITES.get(rel)
+                if opp and kb_r == opp:
+                    verdict, confidence, reason = Verdict.INCORRECT, Confidence.HIGH, f"geometry shows {kb_r}"
+                    kb_opposite_match = True
+                    break
 
-    if any(claim_str.lower() in g or (subj.lower() in g and rel.lower() in g) for g in geo_set):
-        verdict = Verdict.INCORRECT
-        confidence = Confidence.HIGH
-        reason = "deterministic geometry contradiction"
-        geo_contradiction_fired = True
+        if any(claim_str.lower() in g or (subj.lower() in g and rel.lower() in g) for g in geo_set):
+            verdict = Verdict.INCORRECT
+            confidence = Confidence.HIGH
+            reason = "deterministic geometry contradiction"
+            geo_contradiction_fired = True
 
-    # Cross-check geometry INCORRECT with VQA
-    if verdict == Verdict.INCORRECT and confidence == Confidence.HIGH:
-        vqa_confirm, _, _, _, _ = verify_action_triple(subj, rel, obj, kb, pil_image, n_questions=2)
-        if vqa_confirm is True:
-            verdict, confidence = Verdict.CORRECT, Confidence.MEDIUM
-            reason = "geometry said INCORRECT but Maverick VQA confirmed → kept"
-            vqa_cross_check_override = True
-        elif vqa_confirm is None:
-            verdict, confidence = Verdict.UNKNOWN, Confidence.LOW
-            reason = "geometry INCORRECT but Maverick uncertain → skipped"
-            vqa_cross_check_override = False
+        # Cross-check geometry INCORRECT with VQA
+        if verdict == Verdict.INCORRECT and confidence == Confidence.HIGH:
+            vqa_confirm, _, _, _, _ = verify_action_triple(subj, rel, obj, kb, pil_image, n_questions=2)
+            if vqa_confirm is True:
+                verdict, confidence = Verdict.CORRECT, Confidence.MEDIUM
+                reason = "geometry said INCORRECT but Maverick VQA confirmed → kept"
+                vqa_cross_check_override = True
+            elif vqa_confirm is None:
+                verdict, confidence = Verdict.UNKNOWN, Confidence.LOW
+                reason = "geometry INCORRECT but Maverick uncertain → skipped"
+                vqa_cross_check_override = False
 
     # Fallback: check entity existence + VQA
     kb_bbox_found_subject = find_best_bbox_from_kb(subj, kb) is not None
