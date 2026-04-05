@@ -63,33 +63,33 @@ def apply_triple_correction(
     cap_lower = caption.lower()
     wp_lower = wrong_phrase.lower()
 
-    if wp_lower in cap_lower:
-        occurrences: list[int] = []
-        start = 0
-        while True:
-            idx = cap_lower.find(wp_lower, start)
-            if idx == -1:
-                break
-            occurrences.append(idx)
-            start = idx + 1
+    # Use word-boundary regex to avoid matching inside other words
+    # e.g. replacing "on" should NOT match "on" inside "orientations"
+    boundary_pattern = re.compile(
+        r'(?<!\w)' + re.escape(wp_lower) + r'(?!\w)',
+        re.IGNORECASE,
+    )
+    matches = list(boundary_pattern.finditer(caption))
 
-        if len(occurrences) == 1:
-            idx = occurrences[0]
+    if matches:
+        if len(matches) == 1:
+            m = matches[0]
         else:
-            subj_idx = cap_lower.find(core_noun(subj)) if subj else -1
-            obj_idx = cap_lower.find(core_noun(obj_)) if obj_ else -1
+            # Multiple matches — pick the one closest to subject/object
+            subj_idx = cap_lower.find(core_noun(subj).lower()) if subj else -1
+            obj_idx = cap_lower.find(core_noun(obj_).lower()) if obj_ else -1
 
-            def _proximity(i: int) -> int:
+            def _proximity(m: re.Match) -> int:
                 d = 0
                 if subj_idx >= 0:
-                    d += abs(i - subj_idx)
+                    d += abs(m.start() - subj_idx)
                 if obj_idx >= 0:
-                    d += abs(i - obj_idx)
+                    d += abs(m.start() - obj_idx)
                 return d
 
-            idx = min(occurrences, key=_proximity)
+            m = min(matches, key=_proximity)
 
-        return caption[:idx] + correct_phrase + caption[idx + len(wrong_phrase):]
+        return caption[:m.start()] + correct_phrase + caption[m.end():]
 
     # LLM fallback
     raw = llm_call(
