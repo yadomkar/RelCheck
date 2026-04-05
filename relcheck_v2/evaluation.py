@@ -36,10 +36,12 @@ def rpope_judge(caption: str, question: str) -> str | None:
         .replace("CAPTION_PLACEHOLDER", caption)
         .replace("QUESTION_PLACEHOLDER", question)
     )
-    resp = llm_call([{"role": "user", "content": prompt}], max_tokens=5)
+    resp = llm_call([{"role": "user", "content": prompt}], max_tokens=200)
     if not resp:
         return None
-    r = resp.strip().lower()
+    # Strip thinking tags from reasoning models (e.g. Qwen3.5)
+    import re
+    r = re.sub(r"<think>.*?</think>", "", resp, flags=re.DOTALL).strip().lower()
     if "yes" in r and "no" not in r:
         return "yes"
     if "no" in r:
