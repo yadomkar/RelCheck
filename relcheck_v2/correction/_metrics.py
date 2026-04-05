@@ -541,6 +541,9 @@ class MetricsCollector:
         # ── KB usage ────────────────────────────────────────────────────
         kb_usage = self._compute_kb_usage(logs)
 
+        # ── Geometry usage ──────────────────────────────────────────────
+        geometry_usage = self._compute_geometry_usage(logs)
+
         return {
             "total_images": n,
             "dispatch_counts": dispatch_counts,
@@ -557,6 +560,7 @@ class MetricsCollector:
             "addendum_acceptance_rate": _safe_rate(addendum_accepted, max(addendum_total, 1)),
             "path_effectiveness": path_effectiveness,
             "kb_usage": kb_usage,
+            "geometry_usage": geometry_usage,
         }
 
     # ── Summary helpers (private) ───────────────────────────────────────
@@ -597,6 +601,17 @@ class MetricsCollector:
                 "bbox_coverage": 0.0,
                 "correct_rel_kb_first_rate": 0.0,
                 "addendum_novelty_rate": 0.0,
+            },
+            "geometry_usage": {
+                "total_action_triples": 0,
+                "geo_check_possible": 0,
+                "geo_check_rate": 0.0,
+                "keypoints_loaded": 0,
+                "keypoints_rate": 0.0,
+                "geo_confirmed": 0,
+                "geo_violated": 0,
+                "family_counts": {},
+                "geo_vqa_agreement_rate": 0.0,
             },
         }
 
@@ -731,6 +746,68 @@ class MetricsCollector:
             "addendum_novelty_rate": _safe_rate(novel_total, available_total),
         }
 
+    @staticmethod
+    def _compute_geometry_usage(
+        logs: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Compute aggregate geometry and ViTPose usage for action triples.
+
+        Args:
+            logs: List of PathLog dicts.
+
+        Returns:
+            Dict with geometry check rates, keypoint usage, family breakdown,
+            and geometry-VQA agreement rate.
+        """
+        total_action = 0
+        geo_possible = 0
+        kp_loaded = 0
+        geo_confirmed = 0  # geo_prereq True
+        geo_violated = 0   # geo_prereq False
+        family_counts: Counter[str] = Counter()
+        # Track agreement: when geo has an opinion, does VQA agree?
+        geo_vqa_agree = 0
+        geo_vqa_total = 0
+
+        for rec in logs:
+            for av in rec.get("action_verifications", []):
+                total_action += 1
+                family = av.get("action_geo_family")
+                geo_result = av.get("geo_prereq_result")
+                kp = av.get("keypoints_loaded", False)
+                verdict = av.get("verdict", "UNKNOWN")
+
+                if av.get("geo_check_possible", False):
+                    geo_possible += 1
+                if kp:
+                    kp_loaded += 1
+                if family:
+                    family_counts[family] += 1
+                if geo_result is True:
+                    geo_confirmed += 1
+                elif geo_result is False:
+                    geo_violated += 1
+
+                # Agreement: geo says True + VQA says CORRECT, or
+                #            geo says False + VQA says INCORRECT
+                if geo_result is not None:
+                    geo_vqa_total += 1
+                    if (geo_result is True and verdict == "CORRECT") or \
+                       (geo_result is False and verdict == "INCORRECT"):
+                        geo_vqa_agree += 1
+
+        return {
+            "total_action_triples": total_action,
+            "geo_check_possible": geo_possible,
+            "geo_check_rate": _safe_rate(geo_possible, total_action),
+            "keypoints_loaded": kp_loaded,
+            "keypoints_rate": _safe_rate(kp_loaded, total_action),
+            "geo_confirmed": geo_confirmed,
+            "geo_violated": geo_violated,
+            "family_counts": dict(family_counts),
+            "geo_vqa_agreement_rate": _safe_rate(geo_vqa_agree, geo_vqa_total),
+        }
+
     # ── Human-readable output ───────────────────────────────────────────
 
     def print_summary(self) -> None:
@@ -819,6 +896,22 @@ class MetricsCollector:
             print(f"    {'-' * 43}")
             for source, data in pe.items():
                 print(f"    {source:<25} {data['n_images']:>7} {data['fraction_modified']:>8.1%}")
+            print()
+
+        # Geometry usage
+        gu = s["geometry_usage"]
+        if gu["total_action_triples"] > 0:
+            print("  Geometry & Pose Usage (action/attribute triples)")
+            print(f"    Total action triples:  {gu['total_action_triples']}")
+            print(f"    Geo check possible:    {gu['geo_check_possible']} ({gu['geo_check_rate']:.1%})")
+            print(f"    Keypoints loaded:      {gu['keypoints_loaded']} ({gu['keypoints_rate']:.1%})")
+            print(f"    Geo confirmed (True):  {gu['geo_confirmed']}")
+            print(f"    Geo violated (False):  {gu['geo_violated']}")
+            print(f"    Geo-VQA agreement:     {gu['geo_vqa_agreement_rate']:.1%}")
+            if gu["family_counts"]:
+                print(f"    Family breakdown:")
+                for fam, cnt in sorted(gu["family_counts"].items(), key=lambda x: -x[1]):
+                    print(f"      {fam:<22} {cnt:>5}")
             print()
 
         print("=" * 60)

@@ -97,6 +97,183 @@ def check_entity_exists_vqa(
     return None
 
 
+# ── Geometry hint builder for grounded VQA ───────────────────────────────
+
+_GEO_HINTS: dict[str, dict[bool, str]] = {
+    "mounting": {
+        True: "Object detection shows the {subj} positioned above the {obj} with overlap. ",
+        False: "Object detection shows the {subj} is NOT positioned above the {obj}. ",
+    },
+    "grasping": {
+        True: "Pose estimation shows the {subj}'s hands near the {obj}. ",
+        False: "Pose estimation shows the {subj}'s hands are far from the {obj} (no physical contact detected). ",
+    },
+    "consuming": {
+        True: "Pose estimation shows the {subj}'s mouth area near the {obj}. ",
+        False: "Pose estimation shows the {subj}'s mouth area is far from the {obj}. ",
+    },
+    "containment": {
+        True: "Object detection shows the {subj} within the {obj}'s boundaries. ",
+        False: "Object detection shows the {subj} is NOT within the {obj}'s boundaries. ",
+    },
+    "adjacency": {
+        True: "Object detection shows the {subj} and {obj} are close together. ",
+        False: "Object detection shows the {subj} and {obj} are far apart. ",
+    },
+}
+
+
+def _build_geo_hint(
+    subj: str,
+    rel: str,
+    obj: str,
+    geo_family: str | None,
+    geo_prereq: bool | None,
+    subj_box: list[float] | None = None,
+    obj_box: list[float] | None = None,
+) -> str:
+    """Build a geometry evidence prefix for VQA prompts.
+
+    When geometry data is available, returns a short sentence describing
+    what the detector/pose estimator found. For known action families,
+    uses a specific template. For unknown verbs with bboxes available,
+    generates a generic spatial context hint from bbox positions.
+
+    Args:
+        subj: Subject entity name.
+        rel: Relation verb.
+        obj: Object entity name.
+        geo_family: Action geometry family or None.
+        geo_prereq: Geometry prerequisite result (True/False) or None.
+        subj_box: Normalized bbox [x1, y1, x2, y2] of subject, or None.
+        obj_box: Normalized bbox [x1, y1, x2, y2] of object, or None.
+
+    Returns:
+        Geometry hint string (with trailing space) or empty string.
+    """
+    # Known family with geometry result → specific hint
+    if geo_family is not None and geo_prereq is not None:
+        templates = _GEO_HINTS.get(geo_family)
+        if templates is not None:
+            template = templates.get(geo_prereq)
+            if template is not None:
+                return template.format(subj=subj, obj=obj)
+
+    # Generic bbox context when both entities are detected but no family matched
+    if subj_box is not None and obj_box is not None:
+        return _bbox_context_hint(subj, obj, subj_box, obj_box)
+
+    return ""
+
+
+def _bbox_context_hint(
+    subj: str,
+    obj: str,
+    subj_box: list[float],
+    obj_box: list[float],
+) -> str:
+    """Generate a rich spatial context hint from bounding box geometry.
+
+    Computes multiple geometric features used in HOI detection literature:
+    relative position, IoU overlap, relative scale, contact likelihood,
+    and containment ratio. Produces a natural language summary for the VLM.
+
+    Args:
+        subj: Subject entity name.
+        obj: Object entity name.
+        subj_box: Normalized bbox [x1, y1, x2, y2] of subject.
+        obj_box: Normalized bbox [x1, y1, x2, y2] of object.
+
+    Returns:
+        Multi-sentence spatial description string with trailing space.
+    """
+    sx1, sy1, sx2, sy2 = subj_box
+    ox1, oy1, ox2, oy2 = obj_box
+
+    # Centroids
+    sx, sy = (sx1 + sx2) / 2, (sy1 + sy2) / 2
+    ox, oy = (ox1 + ox2) / 2, (oy1 + oy2) / 2
+
+    # Sizes
+    s_w, s_h = sx2 - sx1, sy2 - sy1
+    o_w, o_h = ox2 - ox1, oy2 - oy1
+    s_area = max(s_w * s_h, 1e-6)
+    o_area = max(o_w * o_h, 1e-6)
+
+    # ── Relative position ────────────────────────────────────────────
+    dx = ox - sx
+    dy = oy - sy
+    dist = (dx**2 + dy**2) ** 0.5
+
+    if abs(dx) < 0.05 and abs(dy) < 0.05:
+        pos_desc = "directly overlapping"
+    else:
+        v_part = "above" if dy > 0.05 else ("below" if dy < -0.05 else "")
+        h_part = "to the right of" if dx > 0.05 else ("to the left of" if dx < -0.05 else "")
+        if v_part and h_part:
+            pos_desc = f"{v_part} and {h_part}"
+        else:
+            pos_desc = v_part or h_part or "near"
+
+    # ── IoU overlap ──────────────────────────────────────────────────
+    inter_x = max(0, min(sx2, ox2) - max(sx1, ox1))
+    inter_y = max(0, min(sy2, oy2) - max(sy1, oy1))
+    inter_area = inter_x * inter_y
+    union_area = s_area + o_area - inter_area
+    iou = inter_area / max(union_area, 1e-6)
+
+    if iou > 0.3:
+        overlap_desc = "significantly overlapping"
+    elif iou > 0.1:
+        overlap_desc = "partially overlapping"
+    elif inter_area > 0:
+        overlap_desc = "slightly touching"
+    else:
+        overlap_desc = "not touching"
+
+    # ── Relative scale ───────────────────────────────────────────────
+    scale_ratio = s_area / o_area
+    if scale_ratio > 3.0:
+        scale_desc = f"much larger than the {obj}"
+    elif scale_ratio > 1.5:
+        scale_desc = f"larger than the {obj}"
+    elif scale_ratio < 0.33:
+        scale_desc = f"much smaller than the {obj}"
+    elif scale_ratio < 0.67:
+        scale_desc = f"smaller than the {obj}"
+    else:
+        scale_desc = f"similar in size to the {obj}"
+
+    # ── Contact / proximity ──────────────────────────────────────────
+    # Edge-to-edge gap (0 if overlapping)
+    gap_x = max(0, max(sx1, ox1) - min(sx2, ox2))
+    gap_y = max(0, max(sy1, oy1) - min(sy2, oy2))
+    edge_gap = (gap_x**2 + gap_y**2) ** 0.5
+
+    if edge_gap == 0 and iou > 0.05:
+        proximity = "in physical contact"
+    elif edge_gap < 0.05:
+        proximity = "very close (near-contact)"
+    elif edge_gap < 0.15:
+        proximity = "nearby"
+    else:
+        proximity = "separated"
+
+    # ── Containment ──────────────────────────────────────────────────
+    # How much of the smaller object is inside the larger
+    containment = inter_area / min(s_area, o_area) if min(s_area, o_area) > 1e-6 else 0
+    contain_note = ""
+    if containment > 0.8:
+        smaller = obj if o_area < s_area else subj
+        larger = subj if o_area < s_area else obj
+        contain_note = f" The {smaller} is mostly contained within the {larger}."
+
+    return (
+        f"Object detection: the {subj} is {pos_desc} the {obj}, "
+        f"{overlap_desc}, {proximity}, and {scale_desc}.{contain_note} "
+    )
+
+
 # ── Action/attribute triple verification ─────────────────────────────────
 
 
@@ -107,11 +284,14 @@ def verify_action_triple(
     kb: dict,
     pil_image: Image.Image,
     n_questions: int = 3,
+    geo_family: str | None = None,
+    geo_prereq: bool | None = None,
 ) -> tuple[bool | None, int, int, int, bool]:
     """Verify an action/attribute triple using crop-based VQA with multi-question voting.
 
     Asks 2 standard yes/no questions and 1 contrastive forced-choice question
-    (with A/B position randomization to avoid bias).
+    (with A/B position randomization to avoid bias). When geometry evidence is
+    available, it is included in the VQA prompts to ground the VLM's decision.
 
     Args:
         subj: Subject entity.
@@ -120,6 +300,8 @@ def verify_action_triple(
         kb: Visual KB dict.
         pil_image: Full PIL image.
         n_questions: Total number of VQA questions (default 3).
+        geo_family: Action geometry family (e.g. "grasping", "mounting") if detected.
+        geo_prereq: Geometry prerequisite result (True/False/None).
 
     Returns:
         Tuple of (verdict, yes_votes, no_votes, total_votes, contrastive_no).
@@ -137,6 +319,12 @@ def verify_action_triple(
         region_hint = "the full image"
     crop_b64 = encode_b64(crop)
 
+    # Build geometry evidence hint for VQA prompts
+    geo_hint = _build_geo_hint(
+        subj, rel, obj, geo_family, geo_prereq,
+        subj_box=subj_box, obj_box=obj_box,
+    )
+
     # Build counterfactual for contrastive question
     counterfactual_rel = COUNTERFACTUAL_MAP.get(rel.lower(), f"not {rel}")
     ab_flip = hash(f"{subj}{rel}{obj}") % 2 == 1
@@ -153,9 +341,9 @@ def verify_action_triple(
     )
 
     question_templates = [
-        f"In this image, is the {subj} {rel} the {obj}? "
+        f"{geo_hint}In this image, is the {subj} {rel} the {obj}? "
         f"Look carefully at {region_hint}. Answer only YES or NO.",
-        f"Does the {subj} appear to be {rel} the {obj} here? "
+        f"{geo_hint}Does the {subj} appear to be {rel} the {obj} here? "
         f"Observe {region_hint} closely. Answer YES or NO only.",
     ]
     questions_yn = question_templates[: min(n_questions - 1, 2)]

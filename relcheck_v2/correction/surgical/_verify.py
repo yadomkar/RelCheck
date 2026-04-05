@@ -363,9 +363,10 @@ def verify_action_attribute_triple(
             })
         return
 
-    # VQA verification
+    # VQA verification (with geometry-grounded prompting)
     verified, v_yes, v_no, v_total, v_contrastive_no = verify_action_triple(
         subj, rel, obj, kb, pil_image, n_questions=3,
+        geo_family=geo_family, geo_prereq=geo_prereq,
     )
     vqa_yes_votes = v_yes
     vqa_no_votes = v_no
