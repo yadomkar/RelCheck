@@ -47,7 +47,42 @@ RELTR_OBJECT_CLASSES: list[str] = [
     "vase", "vegetable", "vehicle", "wave", "wheel", "window",
     "windshield", "wing", "wire", "woman", "wood",
 ]
-"""150 Visual Genome object classes recognized by RelTR."""
+# Full model vocabulary including N/A sentinel at index 0.
+# Argmax indices from the model map directly into these lists.
+_OBJECT_CLASSES_FULL: list[str] = [
+    "N/A", "airplane", "animal", "arm", "bag", "banana", "basket", "beach",
+    "bear", "bed", "bench", "bike", "bird", "board", "boat", "book",
+    "boot", "bottle", "bowl", "box", "boy", "branch", "building", "bus",
+    "cabinet", "cap", "car", "cat", "chair", "child", "clock", "coat",
+    "counter", "cow", "cup", "curtain", "desk", "dog", "door", "drawer",
+    "ear", "elephant", "engine", "eye", "face", "fence", "finger", "flag",
+    "flower", "food", "fork", "fruit", "giraffe", "girl", "glass", "glove",
+    "guy", "hair", "hand", "handle", "hat", "head", "helmet", "hill",
+    "horse", "house", "jacket", "jean", "kid", "kite", "lady", "lamp",
+    "laptop", "leaf", "leg", "letter", "light", "logo", "man", "men",
+    "motorcycle", "mountain", "mouth", "neck", "nose", "number", "orange",
+    "pant", "paper", "paw", "people", "person", "phone", "pillow", "pizza",
+    "plane", "plant", "plate", "player", "pole", "post", "pot", "racket",
+    "railing", "rock", "roof", "room", "screen", "seat", "sheep", "shelf",
+    "shirt", "shoe", "short", "sidewalk", "sign", "sink", "skateboard",
+    "ski", "skier", "sleeve", "snow", "sock", "stand", "street",
+    "surfboard", "table", "tail", "tie", "tile", "tire", "toilet", "towel",
+    "tower", "track", "train", "tree", "truck", "trunk", "umbrella",
+    "vase", "vegetable", "vehicle", "wave", "wheel", "window",
+    "windshield", "wing", "wire", "woman", "wood",
+]
+
+_PREDICATE_CLASSES_FULL: list[str] = [
+    "N/A", "above", "across", "against", "along", "and", "at",
+    "attached to", "behind", "belonging to", "between", "carrying",
+    "covered in", "covering", "eating", "flying in", "for", "from",
+    "growing on", "hanging from", "has", "holding", "in", "in front of",
+    "laying on", "looking at", "lying on", "made of", "mounted on", "near",
+    "of", "on", "on back of", "over", "painted on", "parked on", "part of",
+    "playing", "riding", "says", "sitting on", "standing on", "to",
+    "under", "using", "walking in", "walking on", "watching", "wearing",
+    "wears", "with",
+]
 
 RELTR_PREDICATE_CLASSES: list[str] = [
     "above", "across", "against", "along", "and", "at", "attached to",
@@ -185,9 +220,9 @@ def _parse_outputs(
     triples: list[dict] = []
     for i, idx in enumerate(keep):
         triples.append({
-            "subject": RELTR_OBJECT_CLASSES[probas_sub[idx].argmax()],
-            "predicate": RELTR_PREDICATE_CLASSES[probas[idx].argmax()],
-            "object": RELTR_OBJECT_CLASSES[probas_obj[idx].argmax()],
+            "subject": _OBJECT_CLASSES_FULL[probas_sub[idx].argmax()],
+            "predicate": _PREDICATE_CLASSES_FULL[probas[idx].argmax()],
+            "object": _OBJECT_CLASSES_FULL[probas_obj[idx].argmax()],
             "subject_conf": probas_sub[idx].max().item(),
             "predicate_conf": probas[idx].max().item(),
             "object_conf": probas_obj[idx].max().item(),
