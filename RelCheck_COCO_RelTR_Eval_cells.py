@@ -158,20 +158,27 @@ if os.path.exists(CAPTIONS_PATH):
 
 pil_images: dict[str, Image.Image] = {}
 new = 0
+t_start = time.time()
+total_to_caption = sum(1 for i in selected if str(i) not in captions)
 for img_id in selected:
     img_info = coco.loadImgs(img_id)[0]
     pil = Image.open(f"{COCO_DIR}/val2017/{img_info['file_name']}").convert("RGB")
     pil_images[str(img_id)] = pil
 
     if str(img_id) not in captions:
+        t0 = time.time()
         cap = caption_image(pil, captioner=CAPTIONER)
         if cap:
             captions[str(img_id)] = cap
             new += 1
+            elapsed = time.time() - t_start
+            avg = elapsed / new
+            eta = avg * (total_to_caption - new)
+            print(f"  [{new}/{total_to_caption}] {img_id} ({time.time()-t0:.1f}s) "
+                  f"ETA {eta/60:.1f}min — {cap[:60]}...")
             if new % 10 == 0:
                 with open(CAPTIONS_PATH, "w") as f:
                     json.dump(captions, f, indent=2)
-                print(f"  Generated {new} captions...")
 
 if new > 0:
     with open(CAPTIONS_PATH, "w") as f:
@@ -264,6 +271,8 @@ if os.path.exists(KB_PATH):
 else:
     cfg.ENABLE_RELTR = True
     knowledge_bases = {}
+    total_kb = len(injected_data)
+    t_start = time.time()
     for idx, (img_id, inj) in enumerate(injected_data.items()):
         pil = pil_images.get(img_id)
         if pil is None:
@@ -271,9 +280,12 @@ else:
         t0 = time.time()
         kb = build_visual_kb(pil, inj["original_caption"], max_detections=20)
         knowledge_bases[img_id] = kb.to_dict()
+        elapsed = time.time() - t_start
+        avg = elapsed / (idx + 1)
+        eta = avg * (total_kb - idx - 1)
+        print(f"  KB [{idx+1}/{total_kb}] {img_id} ({time.time()-t0:.1f}s) "
+              f"sg={len(kb.scene_graph)} triples | ETA {eta/60:.1f}min")
         if (idx + 1) % 10 == 0:
-            print(f"  [{idx+1}/{len(injected_data)}] ({time.time()-t0:.1f}s) "
-                  f"sg={len(kb.scene_graph)} triples")
             with open(KB_PATH, "w") as f:
                 json.dump(knowledge_bases, f)
     with open(KB_PATH, "w") as f:
@@ -297,12 +309,15 @@ if os.path.exists(BASELINE_PATH):
     print(f"Loaded {len(baseline_data)} cached baseline corrections")
 else:
     baseline_data = {}
+    total_bl = len(injected_data)
+    t_start = time.time()
     for idx, (img_id, inj) in enumerate(injected_data.items()):
         pil = pil_images.get(img_id)
         if pil is None:
             continue
         kb = dict(knowledge_bases.get(img_id, {}))
         kb["scene_graph"] = []  # strip scene graph for baseline
+        t0 = time.time()
         result = correct_long_caption(
             img_id, inj["corrupted_caption"], kb,
             pil_image=pil, metrics=mc_baseline,
@@ -313,8 +328,13 @@ else:
             "edit_rate": result.edit_rate,
             "status": result.status,
         }
-        if (idx + 1) % 20 == 0:
-            print(f"  Baseline [{idx+1}/{len(injected_data)}]")
+        elapsed = time.time() - t_start
+        avg = elapsed / (idx + 1)
+        eta = avg * (total_bl - idx - 1)
+        changed = "CHANGED" if result.status == "modified" else "same"
+        print(f"  Baseline [{idx+1}/{total_bl}] {img_id} ({time.time()-t0:.1f}s) "
+              f"{changed} errs={len(result.errors)} | ETA {eta/60:.1f}min")
+        if (idx + 1) % 10 == 0:
             with open(BASELINE_PATH, "w") as f:
                 json.dump(baseline_data, f, indent=2)
     with open(BASELINE_PATH, "w") as f:
@@ -336,11 +356,14 @@ if os.path.exists(RELTR_PATH):
     cfg.ENABLE_RELTR = False
 else:
     reltr_data = {}
+    total_rt = len(injected_data)
+    t_start = time.time()
     for idx, (img_id, inj) in enumerate(injected_data.items()):
         pil = pil_images.get(img_id)
         if pil is None:
             continue
         kb = knowledge_bases.get(img_id, {})
+        t0 = time.time()
         result = correct_long_caption(
             img_id, inj["corrupted_caption"], kb,
             pil_image=pil, metrics=mc_reltr,
@@ -351,8 +374,14 @@ else:
             "edit_rate": result.edit_rate,
             "status": result.status,
         }
-        if (idx + 1) % 20 == 0:
-            print(f"  RelTR [{idx+1}/{len(injected_data)}]")
+        elapsed = time.time() - t_start
+        avg = elapsed / (idx + 1)
+        eta = avg * (total_rt - idx - 1)
+        changed = "CHANGED" if result.status == "modified" else "same"
+        n_sg = len(kb.get("scene_graph", []))
+        print(f"  RelTR [{idx+1}/{total_rt}] {img_id} ({time.time()-t0:.1f}s) "
+              f"{changed} errs={len(result.errors)} sg={n_sg} | ETA {eta/60:.1f}min")
+        if (idx + 1) % 10 == 0:
             with open(RELTR_PATH, "w") as f:
                 json.dump(reltr_data, f, indent=2)
     with open(RELTR_PATH, "w") as f:
@@ -368,7 +397,9 @@ r_chair_results: dict[str, list[dict]] = {
     "original": [], "corrupted": [], "baseline": [], "reltr": [],
 }
 
-for img_id, inj in injected_data.items():
+print("Computing R-CHAIR...")
+total_rc = len(injected_data)
+for rc_idx, (img_id, inj) in enumerate(injected_data.items()):
     anns = inj["coco_annotations"]
     w, h = inj["image_width"], inj["image_height"]
 
@@ -380,6 +411,8 @@ for img_id, inj in injected_data.items():
     if img_id in reltr_data:
         r_chair_results["reltr"].append(
             compute_r_chair(reltr_data[img_id]["corrected"], anns, w, h))
+    if (rc_idx + 1) % 5 == 0 or rc_idx == total_rc - 1:
+        print(f"  R-CHAIR [{rc_idx+1}/{total_rc}]")
 
 for version, results in r_chair_results.items():
     agg = aggregate_r_chair(results)
@@ -392,8 +425,9 @@ with open(f"{SAVE_DIR}/r_chair_results.json", "w") as f:
 
 # ── CELL 9 — Per-Image Metrics ───────────────────────────────
 metrics_per_image: list[dict] = []
+print("Computing per-image metrics...")
 
-for img_id, inj in injected_data.items():
+for m_idx, (img_id, inj) in enumerate(injected_data.items()):
     row = {"img_id": img_id, "injection_type": inj["injection_type"]}
     orig = inj["original_caption"]
     stmt = inj["injected_statement"]
@@ -409,6 +443,8 @@ for img_id, inj in injected_data.items():
         row[f"meteor_{run_name}"] = compute_meteor(orig, corrected)
 
     metrics_per_image.append(row)
+    if (m_idx + 1) % 5 == 0 or m_idx == len(injected_data) - 1:
+        print(f"  Metrics [{m_idx+1}/{len(injected_data)}]")
 
 # CLIPScore (optional)
 try:
@@ -418,7 +454,8 @@ try:
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(DEVICE)
     clip_proc = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
-    for row in metrics_per_image:
+    print("Computing CLIPScore...")
+    for cs_idx, row in enumerate(metrics_per_image):
         pil = pil_images.get(row["img_id"])
         if pil is None:
             continue
@@ -432,6 +469,8 @@ try:
             with torch.no_grad():
                 outputs = clip_model(**inputs)
             row[f"clipscore_{run_name}"] = outputs.logits_per_image.item()
+        if (cs_idx + 1) % 5 == 0:
+            print(f"  CLIPScore [{cs_idx+1}/{len(metrics_per_image)}]")
     print("CLIPScore computed.")
 except Exception as e:
     print(f"CLIPScore skipped: {e}")
@@ -454,6 +493,8 @@ if os.path.exists(JUDGE_PATH):
 else:
     for run_name, run_data in [("baseline", baseline_data), ("reltr", reltr_data)]:
         judge_results[run_name] = {}
+        total_judge = len(injected_data)
+        t_start = time.time()
         for idx, (img_id, inj) in enumerate(injected_data.items()):
             if img_id not in run_data:
                 continue
@@ -461,25 +502,30 @@ else:
             corrected = run_data[img_id]["corrected"]
             if corrupted == corrected:
                 judge_results[run_name][img_id] = "tie"
-                continue
-
-            prompt = (
-                f"Compare these two captions for factual accuracy.\n"
-                f'Caption A (corrupted): "{corrupted}"\n'
-                f'Caption B (corrected): "{corrected}"\n\n'
-                f"Which is more factually accurate? Answer exactly: A_WINS, B_WINS, or TIE"
-            )
-            raw = llm_call([{"role": "user", "content": prompt}],
-                           max_tokens=20, temperature=0.0)
-            if raw and "B_WINS" in raw.upper():
-                judge_results[run_name][img_id] = "corrected_wins"
-            elif raw and "A_WINS" in raw.upper():
-                judge_results[run_name][img_id] = "corrupted_wins"
             else:
-                judge_results[run_name][img_id] = "tie"
+                prompt = (
+                    f"Compare these two captions for factual accuracy.\n"
+                    f'Caption A (corrupted): "{corrupted}"\n'
+                    f'Caption B (corrected): "{corrected}"\n\n'
+                    f"Which is more factually accurate? Answer exactly: A_WINS, B_WINS, or TIE"
+                )
+                raw = llm_call([{"role": "user", "content": prompt}],
+                               max_tokens=20, temperature=0.0)
+                if raw and "B_WINS" in raw.upper():
+                    judge_results[run_name][img_id] = "corrected_wins"
+                elif raw and "A_WINS" in raw.upper():
+                    judge_results[run_name][img_id] = "corrupted_wins"
+                else:
+                    judge_results[run_name][img_id] = "tie"
 
-            if (idx + 1) % 20 == 0:
-                print(f"  Judge [{run_name}] {idx+1}/{len(injected_data)}")
+            elapsed = time.time() - t_start
+            avg = elapsed / (idx + 1)
+            eta = avg * (total_judge - idx - 1)
+            verdict = judge_results[run_name][img_id]
+            print(f"  Judge [{run_name}] [{idx+1}/{total_judge}] {img_id} "
+                  f"→ {verdict} | ETA {eta/60:.1f}min")
+
+            if (idx + 1) % 10 == 0:
                 with open(JUDGE_PATH, "w") as f:
                     json.dump(judge_results, f, indent=2)
 

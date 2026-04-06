@@ -203,7 +203,7 @@ COUNTERFACTUAL_MAP: dict[str, str] = {
 # ════════════════════════════════════════════════════════════════════════════
 
 ENTITY_SYNONYMS: dict[str, list[str]] = {
-    "person":       ["person", "man", "woman", "child", "boy", "girl", "individual", "human", "people"],
+    "person":       ["person", "man", "woman", "child", "boy", "girl", "individual", "human", "people", "player", "skateboarder", "skateboarders", "skier", "guy", "lady", "kid"],
     "car":          ["car", "vehicle", "automobile", "sedan", "suv", "truck"],
     "couch":        ["couch", "sofa", "settee", "loveseat"],
     "chair":        ["chair", "seat", "stool"],
@@ -249,9 +249,10 @@ ENTITY_SYNONYMS: dict[str, list[str]] = {
     "keyboard":     ["keyboard"],
     "mouse":        ["mouse"],
     "remote":       ["remote", "controller"],
-    "pizza":        ["pizza"],
-    "cake":         ["cake"],
-    "sandwich":     ["sandwich"],
+    "pizza":        ["pizza", "food"],
+    "cake":         ["cake", "food"],
+    "sandwich":     ["sandwich", "food"],
+    "hot dog":      ["hot dog", "food"],
     "refrigerator": ["refrigerator", "fridge"],
     "oven":         ["oven", "stove"],
     "sink":         ["sink", "basin", "washbasin", "washbowl", "double basin"],

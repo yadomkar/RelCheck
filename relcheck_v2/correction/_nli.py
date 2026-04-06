@@ -22,7 +22,6 @@ from ..types import Triple
 from ._utils import core_noun, entity_matches
 from ._vqa import _parse_spatial_facts
 
-
 # ── Enums ────────────────────────────────────────────────────────────────
 
 
@@ -98,6 +97,54 @@ def _parse_visual_description_sentences(
     # Fallback: plain period-delimited splitting
     return [s.strip() for s in text.split(".") if s.strip()]
 
+# ── Scene Graph Entity Matching ──────────────────────────────────────────
+
+def _sg_entity_match(caption_entity: str, sg_entity: str) -> bool:
+    """Lenient entity match for scene graph Phase 4 evidence.
+
+    Extends ``entity_matches`` with ENTITY_SYNONYMS lookup so that
+    RelTR's limited vocabulary (e.g. "person", "phone", "bag") can
+    match richer caption entities (e.g. "skateboarders", "cell phone",
+    "handbag").
+
+    Cascade:
+        1. ``entity_matches`` (substring + rapidfuzz)
+        2. Synonym set intersection via ENTITY_SYNONYMS
+        3. Single-word overlap between core nouns
+    """
+    # Level 1: standard matching (substring + fuzzy)
+    if entity_matches(caption_entity, sg_entity):
+        return True
+
+    cap_core = core_noun(caption_entity)
+    sg_core = core_noun(sg_entity)
+    if not cap_core or not sg_core:
+        return False
+
+    # Level 2: synonym intersection
+    cap_syns = {cap_core}
+    sg_syns = {sg_core}
+    for canonical, syns in ENTITY_SYNONYMS.items():
+        syns_lower = [s.lower() for s in syns]
+        if cap_core in syns_lower or cap_core == canonical:
+            cap_syns.update(s.lower() for s in syns)
+            cap_syns.add(canonical)
+        if sg_core in syns_lower or sg_core == canonical:
+            sg_syns.update(s.lower() for s in syns)
+            sg_syns.add(canonical)
+    if cap_syns & sg_syns:
+        return True
+
+    # Level 3: single-word overlap (catches "baseball glove" ↔ "glove",
+    # "tennis racket" ↔ "racket", "dining table" ↔ "table")
+    cap_words = set(cap_core.split())
+    sg_words = set(sg_core.split())
+    if cap_words & sg_words:
+        return True
+
+    return False
+
+
 # ── Evidence Collection ──────────────────────────────────────────────────
 
 
@@ -172,20 +219,22 @@ def collect_nli_evidence(
             if subj_found and obj_found:
                 evidence.append(f"[visual_description] {sentence.strip()}")
 
-    # Phase 4: Scene graph triples where both entities match
+    # Phase 4: Scene graph evidence
+    # Include all scene graph triples — the LLM is better at entity
+    # matching ("man" = "person", "racket" = "tennis racket") than
+    # our string-based heuristics. With 4–21 triples per image this
+    # is negligible in the 128K context window.
     if scene_graph:
         for triple in scene_graph:
             t_subj = triple.get("subject", "")
-            t_obj = triple.get("object", "")
             t_pred = triple.get("predicate", "")
+            t_obj = triple.get("object", "")
             t_conf = triple.get("predicate_conf", 0.0)
-            if (entity_matches(subj, t_subj) and entity_matches(obj, t_obj)) or \
-               (entity_matches(subj, t_obj) and entity_matches(obj, t_subj)):
-                evidence.append(
-                    f"[scene_graph] {t_subj} {t_pred} {t_obj} (conf={t_conf:.2f})"
-                )
+            evidence.append(
+                f"[scene_graph] {t_subj} {t_pred} {t_obj} (conf={t_conf:.2f})"
+            )
 
-    return evidence[:10]
+    return evidence
 
 
 # ── Evidence Source Classification ───────────────────────────────────────
