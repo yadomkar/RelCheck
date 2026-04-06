@@ -321,6 +321,7 @@ else:
         result = correct_long_caption(
             img_id, inj["corrupted_caption"], kb,
             pil_image=pil, metrics=mc_baseline,
+            include_addendum=False,
         )
         baseline_data[img_id] = {
             "corrected": result.corrected,
@@ -367,6 +368,7 @@ else:
         result = correct_long_caption(
             img_id, inj["corrupted_caption"], kb,
             pil_image=pil, metrics=mc_reltr,
+            include_addendum=False,
         )
         reltr_data[img_id] = {
             "corrected": result.corrected,
