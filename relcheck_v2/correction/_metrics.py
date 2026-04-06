@@ -133,6 +133,11 @@ def _empty_path_log(img_id: str) -> dict[str, Any]:
             "visual_description_input": "",
             "visual_description_too_short": False,
         },
+        "scene_graph": {
+            "n_triples": 0,
+            "n_evidence_hits": 0,
+            "enabled": False,
+        },
     }
 
 
@@ -408,6 +413,28 @@ class MetricsCollector:
         self._ensure_image(img_id)
         self._logs[img_id]["missing_fact_addendum"] = dict(fields)
 
+    def record_scene_graph(
+        self,
+        img_id: str,
+        n_triples: int,
+        n_evidence_hits: int,
+        enabled: bool,
+    ) -> None:
+        """Record scene graph stats for *img_id*.
+
+        Args:
+            img_id: Image identifier.
+            n_triples: Number of RelTR triples produced.
+            n_evidence_hits: Number of NLI evidence items from scene graph.
+            enabled: Whether ENABLE_RELTR was True.
+        """
+        self._ensure_image(img_id)
+        self._logs[img_id]["scene_graph"] = {
+            "n_triples": n_triples,
+            "n_evidence_hits": n_evidence_hits,
+            "enabled": enabled,
+        }
+
     # ── Serialization ───────────────────────────────────────────────────
 
     def to_json(self) -> dict[str, dict[str, Any]]:
@@ -547,6 +574,9 @@ class MetricsCollector:
         # ── NLI usage ───────────────────────────────────────────────────
         nli_usage = self._compute_nli_usage(logs)
 
+        # ── RelTR usage ─────────────────────────────────────────────────
+        reltr_usage = self._compute_reltr_usage(logs)
+
         return {
             "total_images": n,
             "dispatch_counts": dispatch_counts,
@@ -565,6 +595,7 @@ class MetricsCollector:
             "kb_usage": kb_usage,
             "geometry_usage": geometry_usage,
             "nli_usage": nli_usage,
+            "reltr_usage": reltr_usage,
         }
 
     # ── Summary helpers (private) ───────────────────────────────────────
@@ -629,6 +660,12 @@ class MetricsCollector:
                 "contradict_high_geometry": 0,
                 "contradict_high_entity": 0,
                 "contradict_low_visual": 0,
+            },
+            "reltr_usage": {
+                "total_triples": 0,
+                "mean_triples_per_image": 0.0,
+                "total_evidence_hits": 0,
+                "evidence_hit_rate": 0.0,
             },
         }
 
@@ -903,6 +940,45 @@ class MetricsCollector:
         }
 
     # ── Human-readable output ───────────────────────────────────────────
+
+    @staticmethod
+    def _compute_reltr_usage(logs: list[dict[str, Any]]) -> dict[str, Any]:
+        """Compute aggregate RelTR scene graph usage statistics.
+
+        Args:
+            logs: List of PathLog dicts.
+
+        Returns:
+            Dict with total_triples, mean_triples_per_image,
+            total_evidence_hits, evidence_hit_rate.
+        """
+        n = len(logs)
+        if n == 0:
+            return {
+                "total_triples": 0,
+                "mean_triples_per_image": 0.0,
+                "total_evidence_hits": 0,
+                "evidence_hit_rate": 0.0,
+            }
+
+        total_triples = 0
+        total_evidence_hits = 0
+        images_with_hits = 0
+
+        for rec in logs:
+            sg = rec.get("scene_graph", {})
+            total_triples += sg.get("n_triples", 0)
+            hits = sg.get("n_evidence_hits", 0)
+            total_evidence_hits += hits
+            if hits > 0:
+                images_with_hits += 1
+
+        return {
+            "total_triples": total_triples,
+            "mean_triples_per_image": round(total_triples / n, 2),
+            "total_evidence_hits": total_evidence_hits,
+            "evidence_hit_rate": _safe_rate(images_with_hits, n),
+        }
 
     def print_summary(self) -> None:
         """Print a human-readable summary to stdout.

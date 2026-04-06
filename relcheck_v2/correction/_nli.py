@@ -40,6 +40,7 @@ class EvidenceSource(str, Enum):
     SPATIAL_FACT = "spatial_fact"
     VISUAL_DESCRIPTION = "visual_description"
     ENTITY_EXISTENCE = "entity_existence"
+    SCENE_GRAPH = "scene_graph"
     MIXED = "mixed"
 
 
@@ -106,6 +107,7 @@ def collect_nli_evidence(
     spatial_facts: list[str],
     visual_description: str,
     hard_facts: list[str],
+    scene_graph: list[dict] | None = None,
 ) -> list[str]:
     """Gather KB evidence relevant to a subject-object pair.
 
@@ -170,6 +172,19 @@ def collect_nli_evidence(
             if subj_found and obj_found:
                 evidence.append(f"[visual_description] {sentence.strip()}")
 
+    # Phase 4: Scene graph triples where both entities match
+    if scene_graph:
+        for triple in scene_graph:
+            t_subj = triple.get("subject", "")
+            t_obj = triple.get("object", "")
+            t_pred = triple.get("predicate", "")
+            t_conf = triple.get("predicate_conf", 0.0)
+            if (entity_matches(subj, t_subj) and entity_matches(obj, t_obj)) or \
+               (entity_matches(subj, t_obj) and entity_matches(obj, t_subj)):
+                evidence.append(
+                    f"[scene_graph] {t_subj} {t_pred} {t_obj} (conf={t_conf:.2f})"
+                )
+
     return evidence[:10]
 
 
@@ -190,6 +205,8 @@ def classify_evidence_source(evidence: list[str]) -> EvidenceSource:
             sources.add(EvidenceSource.ENTITY_EXISTENCE)
         elif e.startswith("[visual_description]"):
             sources.add(EvidenceSource.VISUAL_DESCRIPTION)
+        elif e.startswith("[scene_graph]"):
+            sources.add(EvidenceSource.SCENE_GRAPH)
 
     if len(sources) == 0:
         return EvidenceSource.VISUAL_DESCRIPTION  # fallback
@@ -256,6 +273,7 @@ IMPORTANT — Semantic matching guidance:
 - Action synonyms: "playing with" and "interacting with" are semantically similar. "holding" and "carrying" overlap. "sitting on" and "resting on" are equivalent. Focus on whether the core action/interaction is consistent.
 - Entity synonyms: "man" and "person" refer to the same entity. "car" and "vehicle" are equivalent. Match entities by meaning, not exact words.
 - Negation from absence: If the object detector found NO instances of an entity, that is strong evidence the entity is not present in the image.
+- Scene graph evidence: Relations tagged [scene_graph] come from a visual classifier (RelTR) with a limited vocabulary of ~50 predicates. Treat these as strong visual evidence when the predicate matches or is semantically close to the claim.
 
 Verdict definitions:
 - SUPPORT: The evidence clearly confirms the claim is true (semantic match, not just word overlap)
@@ -272,7 +290,7 @@ Example response format:
 2: CONTRADICT
 3: NEUTRAL"""
 
-_TAG_RE = re.compile(r'^\[(spatial_fact|visual_description|entity_existence)\]\s*')
+_TAG_RE = re.compile(r'^\[(spatial_fact|visual_description|entity_existence|scene_graph)\]\s*')
 
 
 def format_batch_nli_prompt(
@@ -308,6 +326,7 @@ def nli_check_triples_batch(
     spatial_facts: list[str],
     visual_description: str,
     hard_facts: list[str],
+    scene_graph: list[dict] | None = None,
 ) -> list[NLIResult]:
     """Run batched NLI entailment check for all triples against KB evidence.
 
@@ -320,6 +339,7 @@ def nli_check_triples_batch(
         ev = collect_nli_evidence(
             triple.subject, triple.object,
             spatial_facts, visual_description, hard_facts,
+            scene_graph=scene_graph,
         )
         if ev:
             evidence_map[i] = ev
@@ -385,6 +405,7 @@ def nli_check_triple(
     spatial_facts: list[str],
     visual_description: str,
     hard_facts: list[str],
+    scene_graph: list[dict] | None = None,
 ) -> NLIResult:
     """Run NLI entailment check for a single triple against KB evidence.
 
@@ -392,6 +413,7 @@ def nli_check_triple(
     """
     evidence = collect_nli_evidence(
         subj, obj, spatial_facts, visual_description, hard_facts,
+        scene_graph=scene_graph,
     )
 
     if not evidence:

@@ -345,3 +345,18 @@ MAX_CORRECTIONS_PER_BATCH: int = 99
 When more errors are found, only the highest-confidence ones are sent to the
 batch corrector. Remaining errors fall back to sentence deletion.
 Llama-3.3-70B garbles output when given 6+ simultaneous edits."""
+
+# ════════════════════════════════════════════════════════════════════════════
+# RELTR SCENE GRAPH INTEGRATION
+# ════════════════════════════════════════════════════════════════════════════
+
+ENABLE_RELTR: bool = False
+"""Master toggle for RelTR scene graph generation (fourth KB layer).
+When False (default), no RelTR code paths are executed."""
+
+RELTR_CONF_THRESHOLD: float = 0.3
+"""Minimum confidence for accepting a RelTR triple.
+Subject, predicate, AND object confidence must all exceed this."""
+
+RELTR_CHECKPOINT_PATH: str = "/content/drive/MyDrive/RelCheck_Data/checkpoint0149.pth"
+"""Path to the pretrained RelTR weights file."""

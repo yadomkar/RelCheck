@@ -146,6 +146,7 @@ def correct_long_caption(
             spatial_facts=spatial_facts,
             visual_description=kb.get("visual_description", "") or "",
             hard_facts=kb.get("hard_facts", []),
+            scene_graph=kb.get("scene_graph"),
         )
 
     errors: list[CorrectionError] = []

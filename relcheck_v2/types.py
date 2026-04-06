@@ -223,6 +223,7 @@ class VisualKB:
     spatial_facts: list[str] = field(default_factory=list)
     visual_description: str = ""
     detections: list[Detection] = field(default_factory=list)
+    scene_graph: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Serialize to a plain dict for JSON checkpointing."""
@@ -231,6 +232,7 @@ class VisualKB:
             "spatial_facts": self.spatial_facts,
             "visual_description": self.visual_description,
             "detections": [d.as_tuple() for d in self.detections],
+            "scene_graph": self.scene_graph,
         }
 
     @classmethod
@@ -247,4 +249,5 @@ class VisualKB:
             spatial_facts=d.get("spatial_facts", []),
             visual_description=d.get("visual_description", ""),
             detections=dets,
+            scene_graph=d.get("scene_graph", []),
         )

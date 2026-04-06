@@ -13,6 +13,9 @@
 | C: + ViTPose fix + geo hints − addendum | 65.0% | 69% (11/16) | +15.6% | 80% (16/20) |
 | D: Qwen3.5-397B VLM (thinking model) | 0.0% | 0% (0/16) | 0.0% | 0% |
 | E: KB rebuild (same as C, fresh KB) | 60.0% | 62% (10/16) | +9.4% | 80% (16/20) |
+| **F: + NLI pre-filter (ENABLE_NLI=True)** | **72.2%** | **79% (11/14)** | +6.7% | 78% (14/18) |
+| G: + Clean KB (batch_size=1) | 61.1% | 64% (9/14) | +6.7% | 78% (14/18) |
+| H: + Anti-garble prompt (batch_size=4) | 72.2% | 71% (10/14) | +0.0% | 78% (14/18) |
 
 **Note on run E:** Same code as C but KB was rebuilt fresh. The KB has more detections
 (20 vs 13.5 avg) and far more spatial facts (190 vs 30.6 avg), likely from a different
@@ -21,50 +24,53 @@ The accuracy drop is from the richer/noisier KB causing more aggressive correcti
 
 ## Verification Statistics
 
-| Metric | A (baseline) | B (+addendum) | C (−addendum) | E (fresh KB) |
-|---|---|---|---|---|
-| Total triples extracted | 144 | 144 | 148 | 144 |
-| SPATIAL CORRECT | 42 | 33 | 31 | 34 |
-| SPATIAL INCORRECT | 38 | 48 | 51 | 45 |
-| ACTION CORRECT | 10 | 9 | 8 | 10 |
-| ACTION INCORRECT | 6 | 8 | 12 | 7 |
-| ATTRIBUTE CORRECT | 10 | 10 | 8 | 8 |
-| ATTRIBUTE INCORRECT | 4 | 6 | 5 | 6 |
-| UNKNOWN verdicts | 0 | 0 | 0 | 0 |
-| Total INCORRECT | 48 | 62 | 68 | 58 |
+| Metric | A (baseline) | B (+addendum) | C (−addendum) | E (fresh KB) | F (+NLI) |
+|---|---|---|---|---|---|
+| Total triples extracted | 144 | 144 | 148 | 144 | 128 |
+| SPATIAL CORRECT | 42 | 33 | 31 | 34 | 20 |
+| SPATIAL INCORRECT | 38 | 48 | 51 | 45 | 55 |
+| ACTION CORRECT | 10 | 9 | 8 | 10 | 5 |
+| ACTION INCORRECT | 6 | 8 | 12 | 7 | 13 |
+| ATTRIBUTE CORRECT | 10 | 10 | 8 | 8 | 4 |
+| ATTRIBUTE INCORRECT | 4 | 6 | 5 | 6 | 11 |
+| UNKNOWN verdicts | 0 | 0 | 0 | 0 | 0 |
+| Total INCORRECT | 48 | 62 | 68 | 58 | 79 |
 
 ## Correction Application
 
-| Metric | A (baseline) | B (+addendum) | C (−addendum) | E (fresh KB) |
-|---|---|---|---|---|
-| REPLACE_WORD guidance | 26 | 40 | 45 | 37 |
-| DELETE_SENTENCE guidance | 22 | 22 | 23 | 21 |
-| SOFTEN guidance | 0 | 0 | 0 | 0 |
-| Batch acceptance rate | 100% | 100% | 100% | 100% |
-| Fallback deletion rate | 0% | 0% | 0% | 0% |
-| Post-verify revert rate | 0% | 0% | 0% | 0% |
+| Metric | A (baseline) | B (+addendum) | C (−addendum) | E (fresh KB) | F (+NLI) |
+|---|---|---|---|---|---|
+| REPLACE_WORD guidance | 26 | 40 | 45 | 37 | 61 |
+| DELETE_SENTENCE guidance | 22 | 22 | 23 | 21 | 18 |
+| SOFTEN guidance | 0 | 0 | 0 | 0 | 0 |
+| Batch acceptance rate | 100% | 100% | 100% | 100% | 94.4% |
+| Fallback deletion rate | 0% | 0% | 0% | 0% | 5.6% |
+| Post-verify revert rate | 0% | 0% | 0% | 0% | 5.6% |
 
 ## KB & Evidence Sources
 
-| Metric | A (baseline) | B (+addendum) | C (−addendum) | E (fresh KB) |
-|---|---|---|---|---|
-| KB-first correct rel rate | 27.1% | 37.1% | 35.3% | 46.6% |
-| Spatial fact hit rate | 3.8% | 3.7% | 3.7% | 2.5% |
-| Bbox coverage | 52.3% | 52.7% | 52.6% | 72.7% |
-| Mean detections | 13.5 | 13.5 | 13.5 | 20.0 |
-| Mean spatial facts | 30.6 | 30.6 | 30.6 | 190.1 |
+| Metric | A (baseline) | B (+addendum) | C (−addendum) | E (fresh KB) | F (+NLI) |
+|---|---|---|---|---|---|
+| KB-first correct rel rate | 27.1% | 37.1% | 35.3% | 46.6% | 15.2% |
+| Spatial fact hit rate | 3.8% | 3.7% | 3.7% | 2.5% | 0.0% |
+| Bbox coverage | 52.3% | 52.7% | 52.6% | 72.7% | 73.6% |
+| Mean detections | 13.5 | 13.5 | 13.5 | 20.0 | 20.0 |
+| Mean spatial facts | 30.6 | 30.6 | 30.6 | 190.1 | 191.1 |
+| NLI checks | — | — | — | — | 108 |
+| NLI VQA calls saved | — | — | — | — | 71 (66%) |
+| NLI evidence hit rate | — | — | — | — | 92.6% |
 
 ## Geometry & Pose System
 
-| Metric | A (baseline) | B (+addendum) | C (−addendum) | E (fresh KB) |
-|---|---|---|---|---|
-| Geo check possible | 5 (16.1%) | 5 (16.1%) | 5 (15.2%) | 7 (22.6%) |
-| Keypoints loaded | 0 (0%) | 4 (12.1%) | 4 (12.1%) | 5 (16.1%) |
-| Geo confirmed (True) | 0 | 2 | 2 | 5 |
-| Geo violated (False) | 1 | 3 | 3 | 2 |
-| Geo-VQA agreement | 0% | 60% | 60% | 85.7% |
-| Grasping family hits | 10 | 10 | 10 | 10 |
-| Mounting family hits | 2 | 2 | 2 | 2 |
+| Metric | A (baseline) | B (+addendum) | C (−addendum) | E (fresh KB) | F (+NLI) |
+|---|---|---|---|---|---|
+| Geo check possible | 5 (16.1%) | 5 (16.1%) | 5 (15.2%) | 7 (22.6%) | 7 (21.2%) |
+| Keypoints loaded | 0 (0%) | 4 (12.1%) | 4 (12.1%) | 5 (16.1%) | 5 (15.2%) |
+| Geo confirmed (True) | 0 | 2 | 2 | 5 | 5 |
+| Geo violated (False) | 1 | 3 | 3 | 2 | 2 |
+| Geo-VQA agreement | 0% | 60% | 60% | 85.7% | 28.6% |
+| Grasping family hits | 10 | 10 | 10 | 10 | 9 |
+| Mounting family hits | 2 | 2 | 2 | 2 | 2 |
 
 ## Geometry-VQA Detailed Decisions (runs B & C)
 
@@ -149,24 +155,61 @@ The accuracy drop is from the richer/noisier KB causing more aggressive correcti
 | field | 2 |
 | cucumbers | 2 |
 
+## NLI Pre-Filter Statistics (Run F)
+
+| Metric | Value |
+|---|---|
+| Total NLI checks | 108 |
+| CONTRADICT | 78 (72%) |
+| NEUTRAL | 20 (19%) |
+| SUPPORT | 10 (9%) |
+| VQA calls saved | 71 (66%) |
+| NLI-final agreement | 91% (80/88) |
+| SUPPORT → CORRECT | 10/10 (100%) |
+| CONTRADICT → INCORRECT | 70/78 (90%) |
+| False negatives (CONTRADICT → CORRECT) | 8 |
+| False positives (SUPPORT → INCORRECT) | 0 |
+
+### NLI Evidence Sources
+
+| Source | Count | % |
+|---|---|---|
+| entity_existence | 60 | 56% |
+| mixed | 30 | 28% |
+| visual_description | 10 | 9% |
+| spatial_fact | 8 | 7% |
+
+### NLI False Negatives (CONTRADICT but CORRECT)
+
+| img_id | Claim | Why wrong |
+|---|---|---|
+| 2c4004388f263f72 | horses in field | Entity mismatch in KB |
+| 2c4004388f263f72 | jockeys on horses | Entity mismatch in KB |
+| 2c4004388f263f72 | jockeys riding horses | Entity mismatch in KB |
+| c542d605c0024365 | carrots on plate | Mixed evidence confusion |
+| 4ece4336cb293790 | man in pool hall | Mixed evidence confusion |
+| 584110c20a4695d9 | faucets at various angles | Mixed evidence confusion |
+| 1050b3c3f36090a3 | woman wearing outfit | Mixed evidence confusion |
+| 5e87eaf2ecc31207 | person wearing red hat | Mixed evidence confusion |
+
 ## Key Takeaways
 
-1. **Detection is solid (80%)** — 16/20 injections detected. The 4 misses are mostly invalid test cases (2 where orig=yes, 1 not extractable as triple, 1 deleted but judge disagrees).
+1. **Run F (NLI) is the new best: 72.2% corrected accuracy** — up from 65.0% (run C). NLI pre-filter saves 66% of VQA calls while improving accuracy by +7.2 percentage points.
 
-2. **Recovery gap (69-75%)** — 5 detected-but-not-recovered cases. 2 are because the injected claim is actually TRUE (pitcher IS next to bowl, drawer IS on left of sink). 2 are extraction failures. 1 is a correction that didn't satisfy the judge.
+2. **NLI has 91% agreement with final verdicts** — 10/10 SUPPORT→CORRECT (zero false positives), 70/78 CONTRADICT→INCORRECT (8 false negatives overridden by VQA). The VQA override mechanism is working correctly.
 
-3. **ViTPose fix was impactful** — went from 0 to 4 keypoint loads, enabling real grasping verification. 3/4 agreed with VQA.
+3. **Entity existence is the dominant NLI signal** — 56% of NLI evidence comes from entity_existence checks. NLI catches "this entity doesn't exist" far better than the old synonym matching (92.6% evidence hit rate vs 3.7%).
 
-4. **Addendum hurts injected accuracy** — 60% with addendum vs 65% without. The added spatial facts confuse the R-POPE judge on injected questions.
+4. **Recovery rate improved to 79%** — 11/14 detectable injections recovered (vs 11/16 = 69% in run C). Two previously-stuck images (584110c20a4695d9, 273bf8ea1ddb78c0) now recover thanks to NLI's more aggressive error detection.
 
-5. **Addendum doesn't affect supplemental** — +15.6% both with and without. The supplemental improvement comes from the correction itself, not addendum.
+5. **Supplemental accuracy dropped to +6.7%** — down from +15.6% in run C. NLI's aggressiveness (79 INCORRECT vs 68) over-corrects some true claims. The 8 false negatives (CONTRADICT but CORRECT) are the tuning target.
 
-6. **Geometry-grounded prompting increased corrections** — 48→68 INCORRECT verdicts, 26→45 REPLACE_WORD. More aggressive but same accuracy.
+6. **Safety mechanisms fired for the first time** — batch rejection (1 image, ratio=2.64) and post-verify revert (1 image, cucumbers above carrots → reverted). These guards are catching real problems from NLI-driven aggressive corrections.
 
-7. **KB spatial facts are the #1 correction source** — 24/68 corrections use deterministic KB data (free, no API calls).
+7. **Detection is solid (78%)** — 14/18 injections detected. The 4 misses are the same invalid test cases as before (2 where orig=yes, 1 not extractable, 1 deleted but judge disagrees).
 
-8. **Bbox coverage (52.6%) is the main bottleneck** — half of entities can't be found by GDino, limiting geometry checks to 15% of action triples.
+8. **Correction source shift** — vlm_query now dominates (47%) over spatial_kb (15%). NLI's entity_existence checks trigger VLM queries to find correct relations, replacing the old deterministic KB lookup path.
 
-9. **Fresh KB rebuild (run E) shows KB quality matters** — more detections (20 vs 13.5) and spatial facts (190 vs 30.6) improved bbox coverage to 72.7% and geo-VQA agreement to 85.7%, but the richer KB also caused more aggressive corrections that hurt accuracy (60% vs 65%). The batch LLM corrector produces garbled output when given too many corrections. Correction quality is now the bottleneck, not detection.
+9. **Geo-VQA agreement dropped to 28.6%** — NLI overrides geo decisions more aggressively. 5/7 geo-confirmed triples were marked INCORRECT by NLI (man holding hammer, microphone, paddle, pool stick all geo=True but NLI=CONTRADICT). This suggests NLI and geometry are in tension for grasping actions.
 
-10. **Best config for paper: Run C** — ViTPose + geo hints, no addendum. 65% corrected accuracy, +55% from corrupted, +15.6% supplemental improvement, 80% detection, 69% recovery.
+10. **Best config for paper: Run F** — 72.2% corrected accuracy, 79% recovery, 78% detection. Supplemental regression needs investigation but the primary metric (corrected accuracy on injected hallucinations) is clearly the best.

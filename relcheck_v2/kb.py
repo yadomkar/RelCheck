@@ -15,7 +15,7 @@ from PIL import Image
 
 from ._logging import log
 from .api import vlm_call, encode_b64
-from .config import BROAD_CATEGORIES
+from .config import BROAD_CATEGORIES, ENABLE_RELTR
 from .detection import detect_objects, dedup_detections
 from .entity import extract_nouns
 from .prompts import KB_DESCRIPTION_PROMPT
@@ -68,9 +68,17 @@ def build_visual_kb(
     ) or ""
     log.debug("Generated visual description (%d chars)", len(visual_description))
 
+    # ── Layer 4: RelTR scene graph (when enabled) ──
+    scene_graph: list[dict] = []
+    if ENABLE_RELTR:
+        from .reltr import extract_scene_graph
+        scene_graph = extract_scene_graph(image)
+        log.info("RelTR produced %d scene graph triples", len(scene_graph))
+
     return VisualKB(
         hard_facts=hard_facts,
         spatial_facts=spatial_facts,
         visual_description=visual_description,
         detections=dets,
+        scene_graph=scene_graph,
     )
