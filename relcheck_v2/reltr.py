@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ._logging import log
-from .config import ENABLE_RELTR, RELTR_CONF_THRESHOLD
+from . import config as _cfg
 
 if TYPE_CHECKING:
     import torch
@@ -132,7 +132,7 @@ def extract_scene_graph(image: "Image.Image") -> list[dict]:
     Triples are filtered by the triple-gate confidence threshold and
     sorted by ``predicate_conf`` descending.
     """
-    if not ENABLE_RELTR:
+    if not _cfg.ENABLE_RELTR:
         return []
 
     import torch as _torch  # noqa: F811
@@ -168,10 +168,11 @@ def _parse_outputs(
     probas_obj = outputs["obj_logits"].softmax(-1)[0, :, :-1]
 
     # Triple-gate: all three confidences must exceed threshold
+    threshold = _cfg.RELTR_CONF_THRESHOLD
     keep = _torch.nonzero(
-        (probas.max(-1)[0] > RELTR_CONF_THRESHOLD)
-        & (probas_sub.max(-1)[0] > RELTR_CONF_THRESHOLD)
-        & (probas_obj.max(-1)[0] > RELTR_CONF_THRESHOLD)
+        (probas.max(-1)[0] > threshold)
+        & (probas_sub.max(-1)[0] > threshold)
+        & (probas_obj.max(-1)[0] > threshold)
     ).flatten()
 
     if len(keep) == 0:

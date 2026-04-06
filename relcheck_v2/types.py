@@ -210,13 +210,14 @@ class CorrectionResult:
 
 @dataclass(slots=True)
 class VisualKB:
-    """Three-layer Visual Knowledge Base for one image.
+    """Four-layer Visual Knowledge Base for one image.
 
     Attributes:
         hard_facts: Object counts from GroundingDINO (deterministic).
         spatial_facts: Pairwise spatial relationships from bbox geometry.
         visual_description: VLM-generated description (soft evidence).
         detections: Raw GroundingDINO detections.
+        scene_graph: RelTR scene graph triples (gated by ENABLE_RELTR).
     """
 
     hard_facts: list[str] = field(default_factory=list)

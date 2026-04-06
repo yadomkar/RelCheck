@@ -1,10 +1,11 @@
 """
 RelCheck v2 — Visual Knowledge Base
 =====================================
-Three-layer KB construction per image:
+Four-layer KB construction per image:
   HARD  — GroundingDINO: objects + counts + bboxes (deterministic)
   GEOM  — Bbox geometry: pairwise spatial relationships (deterministic)
   SOFT  — VLM: actions, attributes, relationships (visual)
+  SCENE — RelTR: scene graph triples (visual, gated by ENABLE_RELTR)
 """
 
 from __future__ import annotations
@@ -15,8 +16,14 @@ from PIL import Image
 
 from ._logging import log
 from .api import vlm_call, encode_b64
-from .config import BROAD_CATEGORIES, ENABLE_RELTR
+from .config import BROAD_CATEGORIES
 from .detection import detect_objects, dedup_detections
+
+
+def _cfg_enable_reltr() -> bool:
+    """Read ENABLE_RELTR at call time (not import time)."""
+    from . import config
+    return config.ENABLE_RELTR
 from .entity import extract_nouns
 from .prompts import KB_DESCRIPTION_PROMPT
 from .spatial import compute_spatial_facts
@@ -70,7 +77,7 @@ def build_visual_kb(
 
     # ── Layer 4: RelTR scene graph (when enabled) ──
     scene_graph: list[dict] = []
-    if ENABLE_RELTR:
+    if _cfg_enable_reltr():
         from .reltr import extract_scene_graph
         scene_graph = extract_scene_graph(image)
         log.info("RelTR produced %d scene graph triples", len(scene_graph))

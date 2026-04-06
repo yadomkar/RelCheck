@@ -77,7 +77,7 @@ from relcheck_v2.correction._metrics import MetricsCollector
 from relcheck_v2.reltr import (
     coco_categories_covered, coco_has_reltr_predicate_coverage,
 )
-from relcheck_v2.spatial import compute_spatial_facts
+from relcheck_v2.spatial import compute_spatial_facts, parse_spatial_facts
 from relcheck_v2.coco_eval import (
     compute_r_chair, aggregate_r_chair,
     hallucination_removed, collateral_damage,
@@ -131,20 +131,14 @@ for img_id in all_img_ids:
         det_tuples.append((cat_name, 1.0, [bx / w, by / h, (bx + bw) / w, (by + bh) / h]))
 
     spatial_facts = compute_spatial_facts(det_tuples)
-    spatial_rels = []
-    for fact in spatial_facts:
-        parts = fact.split(" is ", 1)
-        if len(parts) == 2:
-            subj_part = parts[0].strip()
-            rest = parts[1].strip()
-            for det_name, _, _ in det_tuples:
-                if rest.endswith(det_name):
-                    spatial_rels.append((subj_part, rest[: -len(det_name)].strip(), det_name))
-                    break
+    spatial_rels = parse_spatial_facts(spatial_facts)
 
+    # Predicate coverage is a soft filter — log but don't reject.
+    # RelTR's value is in semantic relations (riding, holding, etc.)
+    # which can't be derived from COCO bbox geometry alone.
     if not coco_has_reltr_predicate_coverage(spatial_rels):
-        fail_reasons["predicate_coverage"] += 1
-        continue
+        fail_reasons["no_predicate_overlap"] += 1
+        # Still select — object coverage is the hard requirement
 
     selected.append(img_id)
 
