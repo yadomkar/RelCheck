@@ -117,6 +117,14 @@ ABSTRACT_ENTITIES: frozenset[str] = frozenset({
     "left side of the scene", "right side of the scene",
     "center of the image", "center of the scene",
     "left portion", "right portion", "upper portion", "lower portion",
+    "center of room", "center-right", "center-left", "mid-air",
+    "right side of street", "left side of street",
+    "side of road", "side of the road",
+    # Scene locations / non-detectable places
+    "room", "street", "sidewalk", "court", "field", "grass",
+    "wall", "mantel", "surface", "ground", "floor", "ceiling",
+    "city", "road", "curb", "ramp", "stadium",
+    "kitchen area", "living room", "grassy field",
     # Abstract concepts that LLaVA likes to reference
     "game", "scene", "setting", "environment", "event", "activity",
     "action", "moment", "situation", "occasion", "atmosphere",

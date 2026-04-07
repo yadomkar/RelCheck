@@ -46,9 +46,10 @@ def compute_r_chair(
         ``n_hallucinated``, ``r_chair_i``, ``has_hallucination``.
     """
     from .correction.surgical._extraction import extract_triples
-    from .correction._utils import entity_matches
+    from .entity import entity_matches as _entity_match
     from .spatial import spatial_verdict
     from .types import RelationType
+    from .config import ABSTRACT_ENTITIES
 
     triples = extract_triples(caption)
     spatial = [t for t in triples if t.rel_type == RelationType.SPATIAL]
@@ -65,8 +66,14 @@ def compute_r_chair(
     n_hallucinated = 0
 
     for t in spatial:
-        subj_bbox = _find_bbox(t.subject, bbox_lookup, entity_matches)
-        obj_bbox = _find_bbox(t.object, bbox_lookup, entity_matches)
+        # Skip triples with abstract/location entities (not verifiable)
+        if t.subject.lower().strip() in ABSTRACT_ENTITIES:
+            continue
+        if t.object.lower().strip() in ABSTRACT_ENTITIES:
+            continue
+
+        subj_bbox = _find_bbox(t.subject, bbox_lookup, _entity_match)
+        obj_bbox = _find_bbox(t.object, bbox_lookup, _entity_match)
         if subj_bbox is None or obj_bbox is None:
             continue
 
