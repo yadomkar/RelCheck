@@ -305,9 +305,8 @@ CAPTIONER_MODELS: dict[str, str | None] = {
 }
 
 DESCRIBE_PROMPT: str = (
-    "Describe this image in detail. Include all objects, "
-    "their spatial positions relative to each other, any actions "
-    "or interactions taking place, and notable attributes like colors and sizes."
+    "Describe this image in 1-2 sentences. Mention the main objects "
+    "and their spatial positions relative to each other."
 )
 
 # ════════════════════════════════════════════════════════════════════════════
