@@ -1,0 +1,10 @@
+pydantic>=2.0
+pycocoevalcap
+transformers
+bitsandbytes
+accelerate
+tqdm
+pandas
+Pillow
+hypothesis
+pytest

@@ -12,7 +12,7 @@
 # ── CELL 0 — Config ─────────────────────────────────────────
 DATASET_NAME = "coco-ee"          # "coco-ee" or "flickr30k-ee"
 OPENAI_API_KEY = ""               # <-- paste your OpenAI key
-MAX_SAMPLES = None                # None = process all, set to e.g. 50 for testing
+MAX_SAMPLES = 10               # None = process all, set to e.g. 50 for testing
 DRY_RUN = False                   # True = skip API calls, use placeholders
 SAVE_DIR = "/content/drive/MyDrive/RelCheck_Data/hallucination_gen"
 
@@ -44,35 +44,14 @@ print("Setup complete.")
 
 # ── CELL 2 — Download COCO-EE Data ──────────────────────────
 # COCO-EE uses COCO val2014 images + custom annotation JSON.
-# Adjust paths if you already have the data on Drive.
+# TEST_MODE=True downloads only a few images (~5MB) instead of the full 6GB zip.
 
-COCO_DIR = "/content/coco_val2014"
+# Point to your existing images on Drive (unzipped val2014 folder)
+# If images are still zipped, Cell 2 will unzip them for you.
+COCO_DIR = "/content/drive/MyDrive/RelCheck_Data/coco_zips/val2014"
 COCO_EE_ANN = f"{SAVE_DIR}/coco_ee_annotations.json"
-
-# Download COCO val2014 images if not present
-if not os.path.exists(f"{COCO_DIR}/COCO_val2014_000000000042.jpg"):
-    os.makedirs(COCO_DIR, exist_ok=True)
-    print("Downloading COCO val2014 images (~6GB)...")
-    os.system(f"wget -q http://images.cocodataset.org/zips/val2014.zip -O /content/val2014.zip")
-    os.system(f"unzip -q /content/val2014.zip -d /content/")
-    # Images land in /content/val2014/ — move to our dir
-    os.system(f"mv /content/val2014/* {COCO_DIR}/")
-    os.system("rm /content/val2014.zip")
-    print("COCO val2014 images ready.")
-else:
-    print(f"COCO val2014 images already at {COCO_DIR}")
-
-# Download COCO captions for annotation extraction
-COCO_CAPS_PATH = f"{COCO_DIR}/captions_val2014.json"
-if not os.path.exists(COCO_CAPS_PATH):
-    print("Downloading COCO captions annotation...")
-    os.system(
-        f"wget -q http://images.cocodataset.org/annotations/annotations_trainval2014.zip "
-        f"-O /content/annotations2014.zip"
-    )
-    os.system("unzip -q /content/annotations2014.zip -d /content/annotations_tmp/")
-    os.system(f"cp /content/annotations_tmp/annotations/captions_val2014.json {COCO_CAPS_PATH}")
-    os.system("rm -rf /content/annotations_tmp /content/annotations2014.zip")
+COCO_CAPS_PATH = "/content/drive/MyDrive/RelCheck_Data/coco_zips/annotations/captions_val2014.json"
+os.makedirs(COCO_DIR, exist_ok=True)
 
 # Build COCO-EE annotation file (list of {image_id, caption} dicts)
 if not os.path.exists(COCO_EE_ANN):
@@ -97,8 +76,33 @@ else:
         annotations = json.load(f)
     print(f"Loaded {len(annotations)} annotations from {COCO_EE_ANN}")
 
+# Download images
+# If your images are already on Drive, this section is skipped.
+# If they're in a zip, unzip first:
+#   !unzip -q /content/drive/MyDrive/RelCheck_Data/coco_zips/val2014.zip -d /content/drive/MyDrive/RelCheck_Data/coco_zips/
+
+# Check images exist and filter annotations to only those with available images
+available = []
+missing = 0
+for ann in annotations:
+    img_id = ann["image_id"]
+    fname = f"COCO_val2014_{int(img_id):012d}.jpg"
+    if os.path.exists(os.path.join(COCO_DIR, fname)):
+        available.append(ann)
+    else:
+        missing += 1
+
+print(f"Images available: {len(available)}, missing: {missing}")
+
+# Write filtered annotation file so the pipeline only sees images that exist
+COCO_EE_ANN_FILTERED = f"{SAVE_DIR}/coco_ee_annotations_filtered.json"
+with open(COCO_EE_ANN_FILTERED, "w") as f:
+    json.dump(available, f)
+print(f"Filtered annotations: {len(available)} (saved to {COCO_EE_ANN_FILTERED})")
+
+ANNOTATION_PATH = COCO_EE_ANN_FILTERED
+
 # Set paths for pipeline
-ANNOTATION_PATH = COCO_EE_ANN
 IMAGE_DIR = COCO_DIR
 print(f"Annotation: {ANNOTATION_PATH}")
 print(f"Image dir:  {IMAGE_DIR}")
