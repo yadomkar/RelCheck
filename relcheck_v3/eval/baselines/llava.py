@@ -16,8 +16,9 @@ import torch
 from PIL import Image as PILImage
 from PIL.Image import Image
 from transformers import (
-    AutoProcessor,
+    AutoTokenizer,
     BitsAndBytesConfig,
+    CLIPImageProcessor,
     LlavaForConditionalGeneration,
 )
 
@@ -64,8 +65,13 @@ class _LLaVAModel:
         # 8-bit quantization config via bitsandbytes (Req 5.1)
         quantization_config = BitsAndBytesConfig(load_in_8bit=True)
 
-        # Load processor (image processor + tokenizer) (Req 5.2)
-        self.processor = AutoProcessor.from_pretrained(model_id)
+        # Load tokenizer and image processor separately (Req 5.2)
+        # liuhaotian/llava-v1.5-7b doesn't have preprocessor_config.json,
+        # so AutoProcessor fails. Load components individually instead.
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.image_processor = CLIPImageProcessor.from_pretrained(
+            "openai/clip-vit-large-patch14-336"
+        )
 
         # Load model in 8-bit (Req 5.1)
         self.model = LlavaForConditionalGeneration.from_pretrained(
@@ -98,24 +104,29 @@ class _LLaVAModel:
         # Format prompt in LLaVA-1.5 conversation template
         formatted_prompt = _LLAVA_PROMPT_TEMPLATE.format(prompt=prompt)
 
-        # Process inputs
-        inputs = self.processor(
-            text=formatted_prompt,
-            images=image,
-            return_tensors="pt",
+        # Process image
+        image_inputs = self.image_processor(
+            images=image, return_tensors="pt"
+        ).to(self.model.device, dtype=torch.float16)
+
+        # Tokenize text
+        text_inputs = self.tokenizer(
+            formatted_prompt, return_tensors="pt"
         ).to(self.model.device)
 
         # Generate
         with torch.inference_mode():
             output_ids = self.model.generate(
-                **inputs,
+                input_ids=text_inputs["input_ids"],
+                attention_mask=text_inputs["attention_mask"],
+                pixel_values=image_inputs["pixel_values"],
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
             )
 
         # Decode only the generated tokens (skip the input)
-        generated_ids = output_ids[:, inputs["input_ids"].shape[1]:]
-        response = self.processor.batch_decode(
+        generated_ids = output_ids[:, text_inputs["input_ids"].shape[1]:]
+        response = self.tokenizer.batch_decode(
             generated_ids, skip_special_tokens=True
         )[0].strip()
 
