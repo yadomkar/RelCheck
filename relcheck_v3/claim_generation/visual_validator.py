@@ -44,7 +44,9 @@ class VisualValidator:
             On detector exception, returns count=0 and empty bboxes.
         """
         try:
-            detections = self._detector.detect(image, object_name)
+            # Grounding DINO (HuggingFace) requires text prompt to end with a period
+            prompt = object_name if object_name.endswith(".") else f"{object_name}."
+            detections = self._detector.detect(image, prompt)
         except Exception:
             logger.error(
                 "Grounding DINO failed for object '%s'", object_name, exc_info=True
