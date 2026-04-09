@@ -43,11 +43,11 @@ RELTR_OBJECT_CLASSES: list[str] = [
     "plane", "plant", "plate", "player", "pole", "post", "pot", "racket",
     "railing", "rock", "roof", "room", "screen", "seat", "sheep", "shelf",
     "shirt", "shoe", "short", "sidewalk", "sign", "sink", "skateboard",
-    "ski", "skier", "sleeve", "snow", "sock", "stand", "street",
+    "ski", "skier", "sneaker", "snow", "sock", "stand", "street",
     "surfboard", "table", "tail", "tie", "tile", "tire", "toilet", "towel",
     "tower", "track", "train", "tree", "truck", "trunk", "umbrella",
     "vase", "vegetable", "vehicle", "wave", "wheel", "window",
-    "windshield", "wing", "wire", "woman", "wood",
+    "windshield", "wing", "wire", "woman", "zebra",
 ]
 # Full model vocabulary including N/A sentinel at index 0.
 # Argmax indices from the model map directly into these lists.
@@ -67,11 +67,11 @@ _OBJECT_CLASSES_FULL: list[str] = [
     "plane", "plant", "plate", "player", "pole", "post", "pot", "racket",
     "railing", "rock", "roof", "room", "screen", "seat", "sheep", "shelf",
     "shirt", "shoe", "short", "sidewalk", "sign", "sink", "skateboard",
-    "ski", "skier", "sleeve", "snow", "sock", "stand", "street",
+    "ski", "skier", "sneaker", "snow", "sock", "stand", "street",
     "surfboard", "table", "tail", "tie", "tile", "tire", "toilet", "towel",
     "tower", "track", "train", "tree", "truck", "trunk", "umbrella",
     "vase", "vegetable", "vehicle", "wave", "wheel", "window",
-    "windshield", "wing", "wire", "woman", "wood",
+    "windshield", "wing", "wire", "woman", "zebra",
 ]
 
 _PREDICATE_CLASSES_FULL: list[str] = [

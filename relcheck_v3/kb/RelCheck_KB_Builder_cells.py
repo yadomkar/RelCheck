@@ -24,7 +24,7 @@ IMAGE_DIR = "/content/coco_val2014/val2014"
 KB_SAVE_DIR = "/content/drive/MyDrive/RelCheck_Data/kb"
 
 # RelTR toggle — set True to enable scene graph layer
-ENABLE_RELTR = False
+ENABLE_RELTR = True
 RELTR_CHECKPOINT = "/content/drive/MyDrive/RelCheck_Data/checkpoint0149.pth"
 
 MAX_SAMPLES = None  # None = all
@@ -44,16 +44,19 @@ else:
     os.system(f"cd {REPO_DIR} && git pull -q")
 sys.path.insert(0, REPO_DIR)
 
-# Apply RelTR config
-import relcheck_v3.reltr.config as reltr_cfg
-reltr_cfg.ENABLE_RELTR = ENABLE_RELTR
-reltr_cfg.RELTR_CHECKPOINT_PATH = RELTR_CHECKPOINT
-
+# RelTR setup — clone repo first if enabled, BEFORE importing config
 if ENABLE_RELTR:
-    # Clone RelTR repo for model code
     RELTR_DIR = "/content/RelTR"
     if not os.path.exists(RELTR_DIR):
         os.system(f"git clone https://github.com/yrcong/RelTR.git {RELTR_DIR}")
+
+# Apply RelTR config AFTER sys.path is set
+from relcheck_v3.reltr import config as reltr_cfg
+print(f"Cell 0 ENABLE_RELTR = {ENABLE_RELTR} (type={type(ENABLE_RELTR).__name__})")
+reltr_cfg.ENABLE_RELTR = ENABLE_RELTR
+reltr_cfg.RELTR_CHECKPOINT_PATH = RELTR_CHECKPOINT
+print(f"Config ENABLE_RELTR = {reltr_cfg.ENABLE_RELTR}")
+if reltr_cfg.ENABLE_RELTR:
     print(f"RelTR enabled — checkpoint: {RELTR_CHECKPOINT}")
 else:
     print("RelTR disabled — SCENE layer will be empty")
