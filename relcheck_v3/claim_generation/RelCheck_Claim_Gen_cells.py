@@ -28,6 +28,13 @@ IMAGE_DIR = "/content/coco_val2014/val2014"
 # Output directory for claim generation results
 SAVE_DIR = "/content/drive/MyDrive/RelCheck_Data/claim_generation"
 
+# GroundingDINO paths (downloaded in Cell 1)
+GDINO_DIR = "/content/groundingdino_weights"
+GDINO_CHECKPOINT = f"{GDINO_DIR}/groundingdino_swint_ogc.pth"
+# Config comes from the installed groundingdino package
+import groundingdino
+GDINO_CONFIG = os.path.join(os.path.dirname(groundingdino.__file__), "config", "GroundingDINO_SwinT_OGC.py")
+
 
 # ── CELL 1 — Setup ──────────────────────────────────────────
 # !pip install openai>=1.0 pydantic>=2.0 tqdm pandas Pillow transformers torch -q
@@ -50,18 +57,8 @@ sys.path.insert(0, REPO_DIR)
 if HF_TOKEN:
     os.environ["HF_TOKEN"] = HF_TOKEN
 
-# Download GroundingDINO config + checkpoint (same as Woodpecker uses)
-GDINO_DIR = "/content/groundingdino_weights"
-GDINO_CONFIG = os.path.join(GDINO_DIR, "GroundingDINO_SwinT_OGC.py")
-GDINO_CHECKPOINT = os.path.join(GDINO_DIR, "groundingdino_swint_ogc.pth")
+# Download GroundingDINO checkpoint (same as Woodpecker uses)
 os.makedirs(GDINO_DIR, exist_ok=True)
-
-if not os.path.exists(GDINO_CONFIG):
-    os.system(
-        f"wget -q -O {GDINO_CONFIG} "
-        "https://raw.githubusercontent.com/IDEA-Research/GroundingDINO/main/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-    )
-    print(f"Downloaded config: {GDINO_CONFIG}")
 
 if not os.path.exists(GDINO_CHECKPOINT):
     os.system(
@@ -69,6 +66,8 @@ if not os.path.exists(GDINO_CHECKPOINT):
         "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth"
     )
     print(f"Downloaded checkpoint: {GDINO_CHECKPOINT}")
+else:
+    print(f"Checkpoint already exists: {GDINO_CHECKPOINT}")
 
 # Verify imports
 from relcheck_v3.claim_generation.config import ClaimGenConfig
@@ -84,11 +83,12 @@ if torch.cuda.is_available():
 
 # Unzip COCO val2014 images to local disk (faster I/O than Drive)
 import zipfile
-print(f"\nUnzipping {COCO_ZIP} to {IMAGE_DIR}...")
-os.makedirs(os.path.dirname(IMAGE_DIR), exist_ok=True)
-with zipfile.ZipFile(COCO_ZIP, "r") as zf:
-    zf.extractall(os.path.dirname(IMAGE_DIR))
-print(f"Done — {len(os.listdir(IMAGE_DIR))} files in {IMAGE_DIR}")
+if not os.path.exists(IMAGE_DIR) or len(os.listdir(IMAGE_DIR)) < 100:
+    print(f"Unzipping {COCO_ZIP} to {IMAGE_DIR}...")
+    os.makedirs(os.path.dirname(IMAGE_DIR), exist_ok=True)
+    with zipfile.ZipFile(COCO_ZIP, "r") as zf:
+        zf.extractall(os.path.dirname(IMAGE_DIR))
+print(f"Images ready — {len(os.listdir(IMAGE_DIR))} files in {IMAGE_DIR}")
 
 
 # ── CELL 2 — Load Hallucination Generation Output ───────────
