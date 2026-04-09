@@ -65,7 +65,8 @@ class ClaimGenerationPipeline:
             api_key=resolved_key, model=config.gpt_model_id
         )
         self._detector = GroundingDINODetector(
-            model_id=config.grounding_dino_model_id
+            detector_config=config.detector_config,
+            detector_model_path=config.detector_model_path,
         )
         self._qa2claim = QA2ClaimModel(
             model_id=config.qa2claim_model_id
@@ -148,15 +149,28 @@ class ClaimGenerationPipeline:
             # Stage 3: Visual Validation
             t0 = time.monotonic()
 
-            # 3a: Object-level validation
-            for concept in key_concepts:
-                answer = self._validator.validate_object(image, concept)
-                object_answers[concept] = answer
+            # 3a: Object-level validation — single pass with all concepts
+            #     (matches Woodpecker's Detector.detect_objects exactly)
+            if isinstance(image, str):
+                image_path = image
+            else:
+                # PIL Image — save to temp file for GroundingDINO's load_image
+                import tempfile
+                tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+                image.save(tmp.name)
+                image_path = tmp.name
+
+            object_answers = self._validator.validate_objects(
+                image_path=image_path,
+                concepts=key_concepts,
+                box_threshold=self._config.box_threshold,
+                text_threshold=self._config.text_threshold,
+            )
 
             # 3b: Attribute-level validation
             for aq in attribute_questions:
                 answer_text = self._validator.validate_attribute(
-                    image, aq.question
+                    image_path, aq.question
                 )
                 attribute_answers.append(
                     AttributeQA(

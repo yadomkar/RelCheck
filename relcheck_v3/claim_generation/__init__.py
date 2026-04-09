@@ -2,7 +2,18 @@
 
 from relcheck_v3.claim_generation.config import ClaimGenConfig
 from relcheck_v3.claim_generation.models import SampleResult, VisualKnowledgeBase
-from relcheck_v3.claim_generation.pipeline import ClaimGenerationPipeline
+
+# ClaimGenerationPipeline imported lazily to avoid requiring GPU-only deps
+# (groundingdino, spacy) at import time. Use:
+#   from relcheck_v3.claim_generation.pipeline import ClaimGenerationPipeline
+
+
+def __getattr__(name: str):
+    if name == "ClaimGenerationPipeline":
+        from relcheck_v3.claim_generation.pipeline import ClaimGenerationPipeline
+        return ClaimGenerationPipeline
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "ClaimGenerationPipeline",

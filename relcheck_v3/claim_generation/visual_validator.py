@@ -26,52 +26,60 @@ class VisualValidator:
     def __init__(
         self, client: OpenAIClient, detector: GroundingDINODetector
     ) -> None:
-        """Store the OpenAI client and Grounding DINO detector instances."""
         self._client = client
         self._detector = detector
 
-    def validate_object(
-        self, image: str | Image.Image, object_name: str
-    ) -> ObjectAnswer:
-        """Detect object instances in the image using Grounding DINO.
+    def validate_objects(
+        self,
+        image_path: str,
+        concepts: list[str],
+        box_threshold: float = 0.35,
+        text_threshold: float = 0.25,
+    ) -> dict[str, ObjectAnswer]:
+        """Detect all concepts in the image in a single pass.
+
+        Matches Woodpecker's Detector.detect_objects() — passes all
+        entities as a period-separated prompt for joint detection.
 
         Args:
-            image: File path string or PIL Image object.
-            object_name: Name of the object to detect.
+            image_path: Path to the image file.
+            concepts: List of entity names to detect.
+            box_threshold: Confidence threshold for boxes.
+            text_threshold: Confidence threshold for text.
 
         Returns:
-            ObjectAnswer with count and bounding boxes.
-            On detector exception, returns count=0 and empty bboxes.
+            Dict mapping entity name → ObjectAnswer with count and bboxes.
+            On detector exception, returns count=0 for all concepts.
         """
+        if not concepts:
+            return {}
+
+        entity_str = ".".join(concepts)
+
         try:
-            # Grounding DINO (HuggingFace) requires text prompt to end with a period
-            prompt = object_name if object_name.endswith(".") else f"{object_name}."
-            detections = self._detector.detect(image, prompt)
+            return self._detector.detect_objects(
+                image_path=image_path,
+                entity_str=entity_str,
+                box_threshold=box_threshold,
+                text_threshold=text_threshold,
+            )
         except Exception:
             logger.error(
-                "Grounding DINO failed for object '%s'", object_name, exc_info=True
+                "Grounding DINO failed for entities '%s'",
+                entity_str,
+                exc_info=True,
             )
-            return ObjectAnswer(object_name=object_name, count=0, bboxes=[])
-
-        bboxes = [d.bbox for d in detections]
-        return ObjectAnswer(
-            object_name=object_name,
-            count=len(bboxes),
-            bboxes=bboxes,
-        )
+            return {
+                c: ObjectAnswer(object_name=c, count=0, bboxes=[])
+                for c in concepts
+            }
 
     def validate_attribute(
         self, image: str | Image.Image, question: str
     ) -> str:
         """Answer an attribute question about the image via GPT-5.4-mini VQA.
 
-        Args:
-            image: File path string or PIL Image object.
-            question: The attribute-level verification question.
-
-        Returns:
-            Short text answer from the model, or "unknown" if the API
-            call fails after retry exhaustion.
+        Returns "unknown" if the API call fails after retry exhaustion.
         """
         try:
             return self._client.chat_with_image(
@@ -79,6 +87,8 @@ class VisualValidator:
             )
         except Exception:
             logger.error(
-                "Attribute VQA failed for question '%s'", question, exc_info=True
+                "Attribute VQA failed for question '%s'",
+                question,
+                exc_info=True,
             )
             return "unknown"

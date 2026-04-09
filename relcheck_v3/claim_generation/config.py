@@ -10,7 +10,8 @@ class ClaimGenConfig(BaseModel):
 
     openai_api_key: str = ""
     gpt_model_id: str = "gpt-5.4-mini"
-    grounding_dino_model_id: str = "IDEA-Research/grounding-dino-base"
+    detector_config: str = ""       # Path to GroundingDINO_SwinT_OGC.py
+    detector_model_path: str = ""   # Path to groundingdino_swint_ogc.pth
     qa2claim_model_id: str = "khhuang/zerofec-qa2claim-t5-base"
     box_threshold: float = 0.35
     text_threshold: float = 0.25

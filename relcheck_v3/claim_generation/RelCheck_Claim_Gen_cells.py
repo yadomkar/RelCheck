@@ -31,6 +31,8 @@ SAVE_DIR = "/content/drive/MyDrive/RelCheck_Data/claim_generation"
 
 # ── CELL 1 — Setup ──────────────────────────────────────────
 # !pip install openai>=1.0 pydantic>=2.0 tqdm pandas Pillow transformers torch -q
+# !pip install groundingdino-py -q
+# !python -m spacy download en_core_web_md -q
 
 import os, sys, json
 from google.colab import drive
@@ -47,6 +49,26 @@ sys.path.insert(0, REPO_DIR)
 
 if HF_TOKEN:
     os.environ["HF_TOKEN"] = HF_TOKEN
+
+# Download GroundingDINO config + checkpoint (same as Woodpecker uses)
+GDINO_DIR = "/content/groundingdino_weights"
+GDINO_CONFIG = os.path.join(GDINO_DIR, "GroundingDINO_SwinT_OGC.py")
+GDINO_CHECKPOINT = os.path.join(GDINO_DIR, "groundingdino_swint_ogc.pth")
+os.makedirs(GDINO_DIR, exist_ok=True)
+
+if not os.path.exists(GDINO_CONFIG):
+    os.system(
+        f"wget -q -O {GDINO_CONFIG} "
+        "https://raw.githubusercontent.com/IDEA-Research/GroundingDINO/main/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+    )
+    print(f"Downloaded config: {GDINO_CONFIG}")
+
+if not os.path.exists(GDINO_CHECKPOINT):
+    os.system(
+        f"wget -q -O {GDINO_CHECKPOINT} "
+        "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth"
+    )
+    print(f"Downloaded checkpoint: {GDINO_CHECKPOINT}")
 
 # Verify imports
 from relcheck_v3.claim_generation.config import ClaimGenConfig
@@ -118,6 +140,8 @@ from relcheck_v3.claim_generation.pipeline import ClaimGenerationPipeline
 
 config = ClaimGenConfig(
     openai_api_key=OPENAI_API_KEY,
+    detector_config=GDINO_CONFIG,
+    detector_model_path=GDINO_CHECKPOINT,
     output_dir=SAVE_DIR,
     checkpoint_interval=CHECKPOINT_INTERVAL,
     max_samples=MAX_SAMPLES,
