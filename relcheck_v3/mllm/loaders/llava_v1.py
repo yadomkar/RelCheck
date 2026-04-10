@@ -75,6 +75,7 @@ class LLaVAV1Loader:
 
         logger.info("Loading LLaVA v1 from %s …", _MODEL_ID)
         try:
+            import torch
             from llava.model import LlavaLlamaForCausalLM
             from transformers import AutoTokenizer
 
@@ -86,14 +87,15 @@ class LLaVAV1Loader:
             self.model = LlavaLlamaForCausalLM.from_pretrained(
                 _MODEL_ID,
                 cache_dir=cache_dir,
-                torch_dtype="float16",
-                device_map="auto",
-            )
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True,
+            ).cuda()
 
             # The LLaVA v1 repo stores the vision tower config on the model.
             vision_tower = self.model.get_vision_tower()
             if vision_tower is not None and not vision_tower.is_loaded:
                 vision_tower.load_model()
+                vision_tower.to(device="cuda", dtype=torch.float16)
             self.image_processor = vision_tower.image_processor if vision_tower else None
 
             logger.info("LLaVA v1 loaded successfully.")
