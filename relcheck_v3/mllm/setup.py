@@ -26,7 +26,7 @@ _WEIGHTS_DIR = Path("/content/weights/")
 
 _LLAVA15_MODEL_ID = "llava-hf/llava-1.5-7b-hf"
 
-_LLAVA_V1_REPO_URL = "https://github.com/liuhaotian/LLaVA.git"
+_LLAVA_V1_REPO_URL = "https://github.com/haotian-liu/LLaVA.git"
 _LLAVA_V1_REPO_DIR = Path("/content/LLaVA")
 _LLAVA_V1_MODEL_ID = (
     "liuhaotian/llava-v1-0719-336px-lora-merge-vicuna-13b-v1.3"

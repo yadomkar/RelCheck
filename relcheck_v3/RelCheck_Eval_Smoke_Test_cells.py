@@ -12,7 +12,7 @@ from __future__ import annotations
 # Quick check that the eval harness works. Runs:
 # - RawMLLM (passthrough baseline)
 # - RelCheckFull (all 3 KB layers + GPT-5.4 thinking correction)
-# on 50 MME existence samples with LLaVA v1 13B (Woodpecker's best baseline).
+# on 50 MME existence samples with LLaVA v1 13B.
 
 # %%
 # ── Cell 1: Setup ───────────────────────────────────────────
@@ -26,10 +26,9 @@ logging.basicConfig(
 )
 _log = logging.getLogger("smoke_test")
 
-# Uncomment in Colab:
-# !pip install -q openai>=1.0 pydantic>=2.0 tqdm pandas scikit-learn \
-#     transformers torch accelerate bitsandbytes Pillow tenacity \
-#     groundingdino-py tabulate
+!pip install -q openai>=1.0 pydantic>=2.0 tqdm pandas scikit-learn \
+    transformers torch accelerate bitsandbytes Pillow tenacity \
+    groundingdino-py tabulate
 
 from google.colab import drive  # type: ignore[import-untyped]
 drive.mount("/content/drive")
@@ -85,7 +84,7 @@ import relcheck_v3.reltr.config as reltr_cfg
 reltr_cfg.ENABLE_RELTR = ENABLE_RELTR
 reltr_cfg.RELTR_CHECKPOINT_PATH = RELTR_CHECKPOINT
 
-# MLLM — LLaVA v1 13B (Woodpecker's best-performing baseline after correction)
+# MLLM — LLaVA v1 13B (Woodpecker's baseline, hallucinates more than 1.5)
 MLLM_MODEL_ID = "liuhaotian/llava-v1-0719-336px-lora-merge-vicuna-13b-v1.3"
 
 _log.info("Config complete.")
