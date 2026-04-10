@@ -27,7 +27,7 @@ logging.basicConfig(
 _log = logging.getLogger("smoke_test")
 
 !pip install -q openai>=1.0 pydantic>=2.0 tqdm pandas scikit-learn \
-    transformers==4.37.2 torch accelerate bitsandbytes Pillow tenacity \
+    transformers==4.31.0 torch accelerate bitsandbytes Pillow tenacity \
     groundingdino-py tabulate
 
 from google.colab import drive  # type: ignore[import-untyped]
@@ -84,7 +84,8 @@ import relcheck_v3.reltr.config as reltr_cfg
 reltr_cfg.ENABLE_RELTR = ENABLE_RELTR
 reltr_cfg.RELTR_CHECKPOINT_PATH = RELTR_CHECKPOINT
 
-# MLLM — LLaVA v1 13B (Woodpecker's baseline, hallucinates more than 1.5)
+# MLLM — LLaVA v1 13B (Woodpecker's baseline)
+# Requires transformers==4.31.0 for compatibility with the legacy LLaVA codebase.
 MLLM_MODEL_ID = "liuhaotian/llava-v1-0719-336px-lora-merge-vicuna-13b-v1.3"
 
 _log.info("Config complete.")
@@ -97,6 +98,36 @@ from relcheck_v3.mllm.setup import setup_llava_v1
 _log.info("Setting up LLaVA v1 13B...")
 setup_llava_v1(weights_dir=Path("/content/weights/"))
 _log.info("LLaVA v1 ready.")
+
+# %%
+# ── Cell 3b: Quick MLLM sanity check ───────────────────────
+# Test that LLaVA v1 actually produces output on one image before
+# running the full 50-sample loop.
+from relcheck_v3.mllm.wrapper import MLLMWrapper
+
+_test_mllm = MLLMWrapper(
+    model_id=MLLM_MODEL_ID,
+    cache_dir="/content/weights/",
+    output_cache_dir=f"{CACHE_DIR}/mllm_test/",
+)
+
+# Grab the first MME existence image
+import os as _os
+_test_img_dir = f"{MME_DATA_DIR}/existence/images"
+_test_imgs = sorted(_os.listdir(_test_img_dir))[:1]
+if _test_imgs:
+    _test_path = f"{_test_img_dir}/{_test_imgs[0]}"
+    _test_out = _test_mllm.answer_yesno(_test_path, "Is there a dog in the image?")
+    _log.info("MLLM sanity check: image=%s output=%r", _test_imgs[0], _test_out)
+    if _test_out:
+        _log.info("✓ MLLM is working — got non-empty output")
+    else:
+        _log.error("✗ MLLM returned empty string — model is broken, do NOT proceed")
+        raise RuntimeError("MLLM sanity check failed: empty output. Check model loading.")
+else:
+    _log.warning("No test images found in %s", _test_img_dir)
+
+del _test_mllm  # free GPU memory for the real run
 
 # %%
 # ── Cell 4: Load MME samples (cap at 50) ────────────────────

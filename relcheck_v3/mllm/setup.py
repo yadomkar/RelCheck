@@ -191,10 +191,16 @@ def setup_llava_v1(
     # 1. Clone repo
     _clone_repo(_LLAVA_V1_REPO_URL, repo_dir)
 
-    # 2. Download weights
+    # 2. Install the LLaVA package in editable mode (required for legacy imports)
+    _run_cmd(
+        [sys.executable, "-m", "pip", "install", "-e", str(repo_dir), "-q"],
+        "pip install -e LLaVA",
+    )
+
+    # 3. Download weights
     _download_hf_model(_LLAVA_V1_MODEL_ID, weights_dir)
 
-    # 3. Add repo to sys.path for custom imports
+    # 4. Add repo to sys.path for custom imports
     repo_str = str(repo_dir)
     if repo_str not in sys.path:
         sys.path.insert(0, repo_str)
