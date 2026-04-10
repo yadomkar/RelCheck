@@ -76,9 +76,7 @@ class LLaVAV1Loader:
         logger.info("Loading LLaVA v1 from %s …", _MODEL_ID)
         try:
             from llava.model import LlavaLlamaForCausalLM
-            from transformers import AutoTokenizer, BitsAndBytesConfig
-
-            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+            from transformers import AutoTokenizer
 
             self.tokenizer = AutoTokenizer.from_pretrained(
                 _MODEL_ID,
@@ -88,7 +86,7 @@ class LLaVAV1Loader:
             self.model = LlavaLlamaForCausalLM.from_pretrained(
                 _MODEL_ID,
                 cache_dir=cache_dir,
-                quantization_config=bnb_config,
+                torch_dtype="float16",
                 device_map="auto",
             )
 
