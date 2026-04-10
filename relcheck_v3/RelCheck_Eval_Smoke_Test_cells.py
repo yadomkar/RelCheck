@@ -27,7 +27,7 @@ logging.basicConfig(
 _log = logging.getLogger("smoke_test")
 
 !pip install -q openai>=1.0 pydantic>=2.0 tqdm pandas scikit-learn \
-    transformers torch accelerate bitsandbytes Pillow tenacity \
+    transformers==4.37.2 torch accelerate bitsandbytes Pillow tenacity \
     groundingdino-py tabulate
 
 from google.colab import drive  # type: ignore[import-untyped]
