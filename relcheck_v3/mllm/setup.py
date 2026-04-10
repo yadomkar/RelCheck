@@ -191,10 +191,12 @@ def setup_llava_v1(
     # 1. Clone repo
     _clone_repo(_LLAVA_V1_REPO_URL, repo_dir)
 
-    # 2. Install the LLaVA package in editable mode (required for legacy imports)
+    # 2. Install the LLaVA package in editable mode WITHOUT its pinned deps
+    #    (the repo pins torch==2.1.2 which is unavailable on modern Colab)
     _run_cmd(
-        [sys.executable, "-m", "pip", "install", "-e", str(repo_dir), "-q"],
-        "pip install -e LLaVA",
+        [sys.executable, "-m", "pip", "install", "-e", str(repo_dir),
+         "--no-deps", "-q"],
+        "pip install -e LLaVA (no-deps)",
     )
 
     # 3. Download weights

@@ -169,8 +169,10 @@ class LLaVAV1Loader:
                 do_sample=False,
             )
 
+        # LLaVA v1's generate() returns ONLY the new tokens (not input+output),
+        # so decode the full output — don't try to skip input_ids length.
         result = self.tokenizer.decode(
-            output_ids[0, input_ids.shape[1] :], skip_special_tokens=True
+            output_ids[0], skip_special_tokens=True
         ).strip()
 
         logger.debug("LLaVA v1 output (%d chars): %.100s…", len(result), result)
