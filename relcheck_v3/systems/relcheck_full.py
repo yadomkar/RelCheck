@@ -113,7 +113,8 @@ class RelCheckFull:
         # Cache the KB text
         self._kb_cache.put(cache_key, self.last_kb_text, model_id="kb", image_id=image_id)
 
-        corrected, _ = self._corrector.run(mllm_output, self.last_kb_text)
+        correction_result = self._corrector.run(mllm_output, self.last_kb_text)
+        corrected = correction_result.corrected_caption
         self._cache.put(cache_key, corrected, model_id="gpt-5.4", image_id=image_id)
         return corrected
 

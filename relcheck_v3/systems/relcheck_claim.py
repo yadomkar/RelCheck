@@ -91,7 +91,8 @@ class RelCheckClaimOnly:
             image=None,
         )
 
-        corrected, _ = self._corrector.run(mllm_output, kb.format())
+        result = self._corrector.run(mllm_output, kb.format())
+        corrected = result.corrected_caption
         self._cache.put(cache_key, corrected, model_id="gpt-5.4", image_id=image_id)
         return corrected
 
