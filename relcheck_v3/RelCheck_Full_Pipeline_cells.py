@@ -366,7 +366,7 @@ if os.path.exists(CORRECTION_CKPT):
 else:
     correction_cache = {}
 
-correction_results = []  # (claim_result, hallu_row, kb, corrected_cap, hallu_info)
+correction_results = []  # (claim_result, hallu_row, kb, corrected_cap, result_dict)
 corrected_count = 0
 passthrough_count = 0
 error_count = 0
@@ -377,43 +377,50 @@ for i, (r, hallu_row, kb) in enumerate(tqdm(kb_results, desc="Stage 5 Correction
     # Check cache
     if r.image_id in correction_cache:
         cached = correction_cache[r.image_id]
-        correction_results.append((r, hallu_row, kb, cached["corrected_cap"], cached.get("hallu_info")))
-        if cached["corrected_cap"] != r.ref_cap:
-            corrected_count += 1
+        # Discard stale cache entries from the old two-stage corrector schema.
+        if "edits" not in cached:
+            print(f"[{r.image_id}] Discarding stale cache entry")
         else:
-            passthrough_count += 1
-        continue
+            correction_results.append(
+                (r, hallu_row, kb, cached["corrected_cap"], cached)
+            )
+            if cached.get("was_corrected"):
+                corrected_count += 1
+            else:
+                passthrough_count += 1
+            continue
 
     try:
         kb_text = kb.format()
-        corrected_cap, hallu_info = corrector.run(r.ref_cap, kb_text)
+        result = corrector.run(r.ref_cap, kb_text)
 
-        # Store result
-        hallu_info_dict = None
-        if hallu_info is not None:
-            hallu_info_dict = {
-                "hallucinated_span": hallu_info.hallucinated_span,
-                "reason": hallu_info.reason,
-                "correction_hint": hallu_info.correction_hint,
-                "confidence": hallu_info.confidence,
-            }
+        edits_dicts = [e.model_dump() for e in result.edits]
+        result_dict = {
+            "corrected_cap": result.corrected_caption,
+            "edits": edits_dicts,
+            "was_corrected": result.was_corrected,
+            "passthrough_reason": result.passthrough_reason,
+        }
 
-        correction_results.append((r, hallu_row, kb, corrected_cap, hallu_info_dict))
+        correction_results.append(
+            (r, hallu_row, kb, result.corrected_caption, result_dict)
+        )
 
-        if corrected_cap != r.ref_cap:
+        if result.was_corrected:
             corrected_count += 1
         else:
             passthrough_count += 1
 
-        # Cache
-        correction_cache[r.image_id] = {
-            "corrected_cap": corrected_cap,
-            "hallu_info": hallu_info_dict,
-        }
+        correction_cache[r.image_id] = result_dict
 
     except Exception as e:
         error_count += 1
-        correction_results.append((r, hallu_row, kb, r.ref_cap, None))
+        correction_results.append((r, hallu_row, kb, r.ref_cap, {
+            "corrected_cap": r.ref_cap,
+            "edits": [],
+            "was_corrected": False,
+            "passthrough_reason": "api_error",
+        }))
         print(f"[{r.image_id}] Correction failed: {e}")
 
     # Checkpoint every 25 samples
@@ -439,7 +446,7 @@ print(f"  Errors:       {error_count}")
 MASTER_JSONL = f"{SAVE_DIR}/full_pipeline_results.jsonl"
 
 with open(MASTER_JSONL, "w") as f:
-    for r, hallu_row, kb, corrected_cap, hallu_info in correction_results:
+    for r, hallu_row, kb, corrected_cap, result_dict in correction_results:
         rec = {
             "image_id": r.image_id,
             "gt_cap": hallu_row["gt_cap"] if hallu_row is not None else "",
@@ -449,8 +456,9 @@ with open(MASTER_JSONL, "w") as f:
                 hallu_row["hallucination_type"] if hallu_row is not None else ""
             ),
             "hallu_reason": hallu_row["reason"] if hallu_row is not None else "",
-            "was_corrected": corrected_cap != r.ref_cap,
-            "hallu_info": hallu_info,
+            "was_corrected": result_dict.get("was_corrected", False),
+            "passthrough_reason": result_dict.get("passthrough_reason"),
+            "edits": result_dict.get("edits", []),
             "kb_text": kb.format(),
             "n_claims": (
                 len(kb.claims.count_claims)
@@ -473,20 +481,22 @@ print(f"Saved {len(correction_results)} records to {MASTER_JSONL}")
 
 # Summary CSV
 summary_rows = []
-for r, hallu_row, kb, corrected_cap, hallu_info in correction_results:
+for r, hallu_row, kb, corrected_cap, result_dict in correction_results:
+    edits = result_dict.get("edits", [])
     summary_rows.append({
         "image_id": r.image_id,
         "gt_cap": hallu_row["gt_cap"] if hallu_row is not None else "",
         "ref_cap": r.ref_cap,
         "corrected_cap": corrected_cap,
-        "was_corrected": corrected_cap != r.ref_cap,
+        "was_corrected": result_dict.get("was_corrected", False),
+        "passthrough_reason": result_dict.get("passthrough_reason") or "",
+        "n_edits": len(edits),
         "hallucination_type": (
             hallu_row["hallucination_type"] if hallu_row is not None else ""
         ),
-        "detected_span": (
-            hallu_info["hallucinated_span"] if hallu_info else ""
+        "edit_layers": ",".join(
+            e.get("contradicted_by", "") for e in edits
         ),
-        "confidence": hallu_info["confidence"] if hallu_info else "",
     })
 
 summary_df = pd.DataFrame(summary_rows)
@@ -504,8 +514,8 @@ import matplotlib.pyplot as plt
 
 show_n = min(10, len(correction_results))
 
-for r, hallu_row, kb, corrected_cap, hallu_info in correction_results[:show_n]:
-    was_corrected = corrected_cap != r.ref_cap
+for r, hallu_row, kb, corrected_cap, result_dict in correction_results[:show_n]:
+    was_corrected = result_dict.get("was_corrected", False)
     status = "CORRECTED" if was_corrected else "PASSTHROUGH"
 
     print(f"{'='*70}")
@@ -517,12 +527,16 @@ for r, hallu_row, kb, corrected_cap, hallu_info in correction_results[:show_n]:
     print(f"Ref Cap:    {r.ref_cap}")
     print(f"Corrected:  {corrected_cap}")
 
-    if hallu_info:
-        print(f"\nStage 5a output:")
-        print(f"  Span:       \"{hallu_info['hallucinated_span']}\"")
-        print(f"  KB reason:  {hallu_info['reason']}")
-        print(f"  Hint:       {hallu_info['correction_hint']}")
-        print(f"  Confidence: {hallu_info['confidence']}")
+    edits = result_dict.get("edits", [])
+    if edits:
+        print(f"\nApplied {len(edits)} edit(s):")
+        for i, e in enumerate(edits, 1):
+            print(f"  [{i}] \"{e['original_span']}\" → \"{e['replacement']}\"")
+            print(f"      contradicted_by: {e['contradicted_by']}")
+            print(f"      evidence:        {e['evidence']}")
+            print(f"      confidence:      {e['confidence']}")
+    elif result_dict.get("passthrough_reason"):
+        print(f"\nPassthrough reason: {result_dict['passthrough_reason']}")
 
     print(f"\n3-Layer KB:")
     print(kb.format())
@@ -573,14 +587,14 @@ if correction_results:
     confidence_dist = {"high": 0, "medium": 0, "low": 0}
     type_correction_rate = {}
 
-    for r, hallu_row, kb, corrected_cap, hallu_info in correction_results:
-        was_corrected = corrected_cap != r.ref_cap
+    for r, hallu_row, kb, corrected_cap, result_dict in correction_results:
+        was_corrected = result_dict.get("was_corrected", False)
         if was_corrected:
             n_corrected += 1
-        if hallu_info and hallu_info.get("confidence"):
-            confidence_dist[hallu_info["confidence"]] = (
-                confidence_dist.get(hallu_info["confidence"], 0) + 1
-            )
+        for e in result_dict.get("edits", []):
+            conf = e.get("confidence")
+            if conf:
+                confidence_dist[conf] = confidence_dist.get(conf, 0) + 1
         if hallu_row is not None:
             htype = hallu_row["hallucination_type"]
             if htype not in type_correction_rate:
@@ -597,6 +611,30 @@ if correction_results:
     print(f"\nConfidence distribution:")
     for conf, count in sorted(confidence_dist.items()):
         print(f"  {conf}: {count}")
+
+    # Per-layer attribution: which KB layer caught how many hallucinations
+    layer_dist = {}
+    for _, _, _, _, result_dict in correction_results:
+        for e in result_dict.get("edits", []):
+            layer = e.get("contradicted_by")
+            if layer:
+                layer_dist[layer] = layer_dist.get(layer, 0) + 1
+
+    print(f"\nEdits attributed by KB layer:")
+    for layer, count in sorted(layer_dist.items(), key=lambda x: -x[1]):
+        print(f"  {layer}: {count}")
+
+    # Passthrough reason histogram
+    passthrough_dist = {}
+    for _, _, _, _, result_dict in correction_results:
+        reason = result_dict.get("passthrough_reason")
+        if reason:
+            passthrough_dist[reason] = passthrough_dist.get(reason, 0) + 1
+
+    if passthrough_dist:
+        print(f"\nPassthrough reasons:")
+        for reason, count in sorted(passthrough_dist.items(), key=lambda x: -x[1]):
+            print(f"  {reason}: {count}")
 
     print(f"\nCorrection rate by hallucination type:")
     for htype, stats in sorted(type_correction_rate.items()):
@@ -639,7 +677,7 @@ from relcheck_v3.eval.metrics import CaptionMetrics
 refcap_preds = []
 corrected_preds = []
 
-for r, hallu_row, kb, corrected_cap, hallu_info in correction_results:
+for r, hallu_row, kb, corrected_cap, _ in correction_results:
     gt_cap = hallu_row["gt_cap"] if hallu_row is not None else ""
     if not gt_cap:
         continue
@@ -696,24 +734,24 @@ else:
 # For corrected samples, show GT vs Hallucinated vs Corrected
 
 corrected_examples = [
-    (r, hallu_row, kb, cc, hi)
-    for r, hallu_row, kb, cc, hi in correction_results
-    if cc != r.ref_cap and hallu_row is not None
+    (r, hallu_row, kb, cc, rd)
+    for r, hallu_row, kb, cc, rd in correction_results
+    if rd.get("was_corrected") and hallu_row is not None
 ]
 
 print(f"Showing {min(10, len(corrected_examples))} corrected examples:\n")
 
-for r, hallu_row, kb, corrected_cap, hallu_info in corrected_examples[:10]:
+for r, hallu_row, kb, corrected_cap, result_dict in corrected_examples[:10]:
     print(f"{'─'*60}")
     print(f"Image {r.image_id} | Type: {hallu_row['hallucination_type']}")
     print()
     print(f"  GT:        {hallu_row['gt_cap']}")
     print(f"  Hallu:     {r.ref_cap}")
     print(f"  Corrected: {corrected_cap}")
-    if hallu_info:
-        print(f"  Detected:  \"{hallu_info['hallucinated_span']}\" → "
-              f"\"{hallu_info['correction_hint']}\" "
-              f"[{hallu_info['confidence']}]")
+    for e in result_dict.get("edits", []):
+        print(f"  Detected:  \"{e['original_span']}\" → "
+              f"\"{e['replacement']}\" "
+              f"[{e['contradicted_by']}, {e['confidence']}]")
     print()
 
 
