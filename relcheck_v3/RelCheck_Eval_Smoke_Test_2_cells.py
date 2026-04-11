@@ -1,19 +1,18 @@
 # ============================================================
-# RelCheck v3 — Smoke Test: MME × LLaVA v1 × 3 systems
+# RelCheck v3 — Smoke Test 2: MME × LLaVA 1.5 7B × 3 systems
 # ============================================================
 # Runs all 4 MME hallucination subtasks (existence, count, position, color)
 # with RawMLLM, Woodpecker, and RelCheckFull.
 #
-# Uses pre-downloaded LLaVA v1 weights from /content/llava_weights/
-# (or Drive fallback). Model swapping between LLaVA and GroundingDINO
-# is handled automatically.
+# Uses LLaVA-1.5-7B from HuggingFace (llava-hf/llava-1.5-7b-hf).
+# No special repo clone needed — standard transformers API.
 #
-# Copy-paste each cell into Colab. Requires A100 GPU.
+# Copy-paste each cell into Colab. Works on T4 or A100.
 from __future__ import annotations
 
 # %% [markdown]
-# # Smoke Test: MME × 3 systems
-# Runs existence, count, position, color on LLaVA v1 13B.
+# # Smoke Test 2: MME × 3 systems
+# Runs existence, count, position, color on LLaVA 1.5 7B.
 # Compares RawMLLM vs Woodpecker vs RelCheckFull.
 
 # %%
@@ -21,7 +20,7 @@ from __future__ import annotations
 import logging, os, sys
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-_log = logging.getLogger("smoke_test")
+_log = logging.getLogger("smoke_test_2")
 
 # Fix HuggingFace download hanging
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
@@ -30,9 +29,7 @@ os.environ["HF_HUB_DISABLE_XET"] = "1"
 !pip install -q openai>=1.0 pydantic>=2.0 tqdm pandas scikit-learn \
     Pillow tenacity groundingdino-py supervision==0.6.0 addict yapf \
     tabulate python-Levenshtein spacy
-!pip install transformers==4.31.0 huggingface_hub==0.25.2 --force-reinstall -q
 !python -m spacy download en_core_web_md -q
-import transformers; print("transformers:", transformers.__version__)
 
 from google.colab import drive
 drive.mount("/content/drive")
@@ -44,13 +41,6 @@ else:
     os.system(f"cd {REPO_DIR} && git pull myfork main -q 2>/dev/null || git pull -q")
 sys.path.insert(0, REPO_DIR)
 
-# Install LLaVA package
-LLAVA_DIR = "/content/LLaVA"
-if not os.path.exists(LLAVA_DIR):
-    os.system(f"git clone https://github.com/haotian-liu/LLaVA.git {LLAVA_DIR}")
-os.system(f"pip install -e {LLAVA_DIR} --no-deps -q")
-sys.path.insert(0, LLAVA_DIR)
-
 _log.info("Setup complete.")
 
 # %%
@@ -60,21 +50,10 @@ os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
 DRIVE_BASE = "/content/drive/MyDrive/RelCheck_Data"
 MME_DATA_DIR = f"{DRIVE_BASE}/mme"
-RESULTS_DIR = f"{DRIVE_BASE}/eval_harness/smoke_test/results"
-CACHE_DIR = f"{DRIVE_BASE}/eval_harness/smoke_test/cache"
+RESULTS_DIR = f"{DRIVE_BASE}/eval_harness/smoke_test_2/results"
+CACHE_DIR = f"{DRIVE_BASE}/eval_harness/smoke_test_2/cache"
 os.makedirs(RESULTS_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
-
-# LLaVA weights — local first, Drive fallback
-LLAVA_WEIGHTS = "/content/llava_weights"
-LLAVA_WEIGHTS_DRIVE = f"{DRIVE_BASE}/weights/llava-v1-13b"
-if not os.path.exists(f"{LLAVA_WEIGHTS}/config.json"):
-    if os.path.exists(f"{LLAVA_WEIGHTS_DRIVE}/config.json"):
-        _log.info("Copying LLaVA weights from Drive...")
-        os.makedirs(LLAVA_WEIGHTS, exist_ok=True)
-        os.system(f"cp {LLAVA_WEIGHTS_DRIVE}/* {LLAVA_WEIGHTS}/")
-    else:
-        _log.error("LLaVA weights not found! Download them first.")
 
 # GroundingDINO
 GDINO_DIR = "/content/groundingdino_weights"
@@ -93,13 +72,75 @@ if ENABLE_RELTR:
     RELTR_DIR = "/content/RelTR"
     if not os.path.exists(RELTR_DIR):
         os.system(f"git clone https://github.com/yrcong/RelTR.git {RELTR_DIR}")
+    # Download RelTR checkpoint if not on Drive
+    if not os.path.exists(RELTR_CHECKPOINT):
+        _log.info("Downloading RelTR checkpoint via gdown...")
+        os.system("pip install -q gdown")
+        os.system(f"gdown https://drive.google.com/uc?id=1F_B4v6oqKpXKdD9YGz2qGZFsGQFDL5JY -O {RELTR_CHECKPOINT}")
+        if os.path.exists(RELTR_CHECKPOINT):
+            _log.info("RelTR checkpoint downloaded (%.1f MB)", os.path.getsize(RELTR_CHECKPOINT)/1e6)
+        else:
+            _log.warning("RelTR download failed — disabling SCENE layer")
+            ENABLE_RELTR = False
 
 import relcheck_v3.reltr.config as reltr_cfg
 reltr_cfg.ENABLE_RELTR = ENABLE_RELTR
 reltr_cfg.RELTR_CHECKPOINT_PATH = RELTR_CHECKPOINT
 
-MLLM_MODEL_ID = "liuhaotian/llava-v1-0719-336px-lora-merge-vicuna-13b-v1.3"
+MLLM_MODEL_ID = "llava-hf/llava-1.5-7b-hf"
 _log.info("Config complete.")
+
+# %%
+# ── Cell 2b: Download MME data (new account — no cached data) ──
+# Downloads MME from HuggingFace lmms-lab/MME dataset and converts
+# to the directory layout expected by MMELoader:
+#   {subtask}/{subtask}.txt  (tab-separated: image_name\tquestion\tanswer)
+#   {subtask}/images/        (image files)
+#
+# Skip this cell if you already have MME data on Drive.
+import os
+
+# Check if all 4 subtask txt files exist
+_all_exist = all(
+    os.path.exists(f"{MME_DATA_DIR}/{st}/{st}.txt")
+    for st in ["existence", "count", "position", "color"]
+)
+if not _all_exist:
+    _log.info("Downloading MME data from HuggingFace...")
+    !pip install datasets -q
+    from datasets import load_dataset
+
+    for subtask in ["existence", "count", "position", "color"]:
+        _log.info("Downloading MME-%s...", subtask)
+        ds = load_dataset("lmms-lab/MME", subtask, split="test")
+        subtask_dir = f"{MME_DATA_DIR}/{subtask}"
+        images_dir = f"{subtask_dir}/images"
+        os.makedirs(images_dir, exist_ok=True)
+
+        txt_lines = []
+        for i, row in enumerate(ds):
+            # Save image
+            img = row["image"]
+            img_name = row.get("image_name", f"{i}.png")
+            if not img_name.endswith((".png", ".jpg", ".jpeg")):
+                img_name = f"{img_name}.png"
+            img_path = f"{images_dir}/{img_name}"
+            if not os.path.exists(img_path):
+                img.save(img_path)
+
+            # Collect question/answer for the subtask txt file
+            question = row["question"]
+            answer = row["answer"]
+            txt_lines.append(f"{img_name}\t{question}\t{answer}")
+
+        # Write the single subtask.txt file
+        txt_path = f"{subtask_dir}/{subtask}.txt"
+        with open(txt_path, "w") as f:
+            f.write("\n".join(txt_lines) + "\n")
+
+        _log.info("MME-%s: %d samples saved to %s", subtask, len(ds), txt_path)
+else:
+    _log.info("MME data already exists at %s", MME_DATA_DIR)
 
 # %%
 # ── Cell 3: Load MME samples ───────────────────────────────
@@ -121,48 +162,44 @@ all_mme = [s for samples in subtasks.values() for s in samples]
 _log.info("Capped to %d total samples (%d per subtask)", len(all_mme), MAX_PER_SUBTASK)
 
 # %%
-# ── Cell 4: MLLM inference (LLaVA v1) ──────────────────────
+# ── Cell 4: MLLM inference (LLaVA 1.5 7B) ─────────────────
 import torch
 from PIL import Image
 from tqdm import tqdm
-from llava.model.language_model.llava_llama import LlavaLlamaForCausalLM
-from llava.constants import DEFAULT_IMAGE_TOKEN, IMAGE_TOKEN_INDEX
-from llava.conversation import conv_templates
-from llava.mm_utils import tokenizer_image_token, process_images
-from transformers import AutoTokenizer
+from transformers import AutoProcessor, LlavaForConditionalGeneration
 
-_log.info("Loading LLaVA v1 from %s", LLAVA_WEIGHTS)
-tokenizer = AutoTokenizer.from_pretrained(LLAVA_WEIGHTS, use_fast=False)
-model = LlavaLlamaForCausalLM.from_pretrained(
-    LLAVA_WEIGHTS, torch_dtype=torch.float16, low_cpu_mem_usage=True
-).cuda()
-vision_tower = model.get_vision_tower()
-if not vision_tower.is_loaded:
-    vision_tower.load_model()
-    vision_tower.to(device="cuda", dtype=torch.float16)
-_log.info("LLaVA v1 loaded.")
+_log.info("Loading LLaVA 1.5 7B from %s", MLLM_MODEL_ID)
+processor = AutoProcessor.from_pretrained(MLLM_MODEL_ID)
+model = LlavaForConditionalGeneration.from_pretrained(
+    MLLM_MODEL_ID, torch_dtype=torch.float16, device_map="auto",
+)
+_log.info("LLaVA 1.5 7B loaded.")
 
 # Run inference on ALL subtasks
 mllm_outputs: dict[str, str] = {}
 for s in tqdm(all_mme, desc="MLLM inference"):
-    conv = conv_templates["llava_v1"].copy()
-    conv.append_message(conv.roles[0], DEFAULT_IMAGE_TOKEN + "\n" + s.question)
-    conv.append_message(conv.roles[1], None)
-    prompt = conv.get_prompt()
     img = Image.open(s.image_path).convert("RGB")
-    input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
-    img_tensor = process_images([img], vision_tower.image_processor, model.config).to(dtype=torch.float16, device="cuda")
+    conversation = [
+        {"role": "user", "content": [
+            {"type": "image"},
+            {"type": "text", "text": s.question},
+        ]},
+    ]
+    text_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+    inputs = processor(text=text_prompt, images=img, return_tensors="pt").to(model.device)
     with torch.inference_mode():
-        out = model.generate(input_ids, images=img_tensor, max_new_tokens=50, do_sample=False)
-    mllm_outputs[s.sample_id] = tokenizer.decode(out[0], skip_special_tokens=True).strip()
+        out = model.generate(**inputs, max_new_tokens=50, do_sample=False)
+    # LLaVA 1.5 HF returns input+output — slice off input tokens
+    generated = out[:, inputs["input_ids"].shape[-1]:]
+    mllm_outputs[s.sample_id] = processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
 
 non_empty = sum(1 for v in mllm_outputs.values() if v)
 _log.info("MLLM done: %d/%d non-empty", non_empty, len(mllm_outputs))
 
 # Free LLaVA from GPU
-del model, tokenizer, vision_tower
+del model, processor
 import gc; gc.collect(); torch.cuda.empty_cache()
-_log.info("LLaVA freed. GPU ready for correction.")
+_log.info("LLaVA 1.5 freed. GPU ready for correction.")
 
 # %%
 # ── Cell 5: RawMLLM baseline ───────────────────────────────
@@ -298,7 +335,7 @@ pivot = df.pivot(index="system", columns="subtask", values="score")
 pivot = pivot.reindex(["RawMLLM", "Woodpecker", "RelCheckFull"])
 pivot = pivot[["existence", "count", "position", "color"]]
 
-print("\n=== MME Hallucination Subtask Scores ===")
+print("\n=== MME Hallucination Subtask Scores (LLaVA 1.5 7B) ===")
 print(pivot.to_markdown())
 
 # Per-subtask detail
@@ -321,5 +358,5 @@ for system in ["RawMLLM", "Woodpecker", "RelCheckFull"]:
     print(f"  {system}: {total:.1f}")
 
 # Save to Drive
-pivot.to_csv(f"{RESULTS_DIR}/mme_smoke_test.csv")
+pivot.to_csv(f"{RESULTS_DIR}/mme_smoke_test_2_llava15.csv")
 _log.info("Results saved to %s", RESULTS_DIR)
