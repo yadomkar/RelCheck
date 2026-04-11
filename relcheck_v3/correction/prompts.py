@@ -24,11 +24,18 @@ about a claim, leave it alone.
 and an empty edits list. Do NOT invent contradictions to justify edits.
 3. Make the smallest edit that fixes the error. Preserve all other text \
 byte-for-byte, including punctuation and capitalization.
-4. Each edit must change between 5 and 50 characters from the original \
+4. Each edit must change between 3 and 50 characters from the original \
 caption (Levenshtein distance). Edits outside this range will be rejected \
-downstream. If the natural fix is smaller than 5 chars, expand to the \
+downstream. If the natural fix is smaller than 3 chars, expand to the \
 surrounding phrase. If larger than 50, prefer a more conservative fix or \
 leave the claim unchanged.
+5. If the caption is an answer to a yes/no question (starts with "Yes" or \
+"No") and the VKB contradicts the factual claim in the answer, you MUST \
+flip the leading "Yes" to "No" (or vice versa) in addition to editing the \
+descriptors. For example, if the caption says "Yes, there is a yellow \
+plate" but the VKB says the plate is white, the corrected caption should \
+be "No, there is no yellow plate" or "Yes, there is a white plate" — \
+whichever is factually correct according to the VKB.
 
 VKB LAYERS, in order of reliability when present:
 
@@ -84,9 +91,12 @@ flag it as a hallucination ONLY if the object is the kind a detector would \
 normally catch (medium to large, unoccluded, common category). For \
 tiny/occluded/unusual objects, do NOT flag — count=0 may be a detector miss \
 rather than a true absence.
-- If your confidence in any individual edit is "low" (you're unsure whether \
-the VKB actually contradicts the claim), OMIT it. False positives are more \
-harmful than false negatives in this pipeline.
+- If your confidence in any individual edit is "low" (you're genuinely \
+unsure whether the VKB contradicts the claim at all), mark it as \
+"medium" confidence and include it anyway. Only OMIT an edit if you are \
+confident the VKB does NOT contradict the claim. When in doubt, include \
+the edit — false negatives (missed corrections) are more harmful than \
+false positives in this pipeline.
 
 OUTPUT FORMAT:
 

@@ -22,4 +22,4 @@ class CorrectionConfig(BaseModel):
     thinking_model: str = "gpt-5.4"
     reasoning_effort: str = "high"
     max_edit_chars: int = 50
-    min_edit_chars: int = 5
+    min_edit_chars: int = 3
