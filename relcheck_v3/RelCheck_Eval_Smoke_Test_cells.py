@@ -96,7 +96,7 @@ from pathlib import Path
 from relcheck_v3.mllm.setup import setup_llava_v1
 
 _log.info("Setting up LLaVA v1 13B...")
-setup_llava_v1(weights_dir=Path("/content/weights/"))
+setup_llava_v1(weights_dir=Path(f"{DRIVE_BASE}/weights/"))
 _log.info("LLaVA v1 ready.")
 
 # %%
@@ -107,7 +107,7 @@ from relcheck_v3.mllm.wrapper import MLLMWrapper
 
 _test_mllm = MLLMWrapper(
     model_id=MLLM_MODEL_ID,
-    cache_dir="/content/weights/",
+    cache_dir=f"{DRIVE_BASE}/weights/",
     output_cache_dir=f"{CACHE_DIR}/mllm_test/",
 )
 

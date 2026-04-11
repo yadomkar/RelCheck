@@ -37,6 +37,8 @@ class RelCheckFull:
 
     Attributes:
         system_id: Identifier for this system variant (``"full"``).
+        last_kb_text: The KB text from the most recent ``correct()`` call.
+            Useful for inspection/debugging. Also cached to disk.
     """
 
     system_id: str = "full"
@@ -58,6 +60,7 @@ class RelCheckFull:
             )
 
         self._cache = InferenceCache(Path(cache_dir))
+        self._kb_cache = InferenceCache(Path(cache_dir) / "kb")
         self._corrector = HallucinationCorrector(
             CorrectionConfig(
                 openai_api_key=resolved_key,
@@ -78,10 +81,16 @@ class RelCheckFull:
             )
         )
 
+        self.last_kb_text: str = ""
+
     def correct(self, image_path: str, mllm_output: str) -> str:
         cache_key = self._make_cache_key(image_path, mllm_output)
         cached = self._cache.get(cache_key)
         if cached is not None:
+            # Also restore KB from cache if available
+            kb_cached = self._kb_cache.get(cache_key)
+            if kb_cached is not None:
+                self.last_kb_text = kb_cached
             return cached
 
         image_id = Path(image_path).stem
@@ -99,9 +108,19 @@ class RelCheckFull:
             image=pil_image,
         )
 
-        corrected, _ = self._corrector.run(mllm_output, kb.format())
+        self.last_kb_text = kb.format()
+
+        # Cache the KB text
+        self._kb_cache.put(cache_key, self.last_kb_text, model_id="kb", image_id=image_id)
+
+        corrected, _ = self._corrector.run(mllm_output, self.last_kb_text)
         self._cache.put(cache_key, corrected, model_id="gpt-5.4", image_id=image_id)
         return corrected
+
+    def get_cached_kb(self, image_path: str, mllm_output: str) -> str | None:
+        """Retrieve the cached KB text for a given image/output pair."""
+        cache_key = self._make_cache_key(image_path, mllm_output)
+        return self._kb_cache.get(cache_key)
 
     def _make_cache_key(self, image_path: str, mllm_output: str) -> str:
         output_hash = hashlib.sha256(mllm_output.encode("utf-8")).hexdigest()

@@ -112,7 +112,7 @@ class WoodpeckerBaseline:
         self._pipeline = ClaimGenerationPipeline(
             ClaimGenConfig(
                 openai_api_key=resolved_key,
-                gpt_model_id="gpt-3.5-turbo",
+                gpt_model_id="gpt-5.4-mini",
                 detector_config=gdino_config,
                 detector_model_path=gdino_checkpoint,
             )
