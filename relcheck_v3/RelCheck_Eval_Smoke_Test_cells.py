@@ -227,6 +227,8 @@ _log.info("Correction systems ready.")
 # Run both systems on all subtasks
 wp_results: dict[str, dict] = {}
 full_results: dict[str, dict] = {}
+# Per-sample diagnostics for inspection
+sample_diagnostics: list[dict] = []
 
 for subtask_name, samples in subtasks.items():
     wp_preds = []
@@ -234,6 +236,12 @@ for subtask_name, samples in subtasks.items():
 
     for s in tqdm(samples, desc=f"WP+Full {subtask_name}"):
         mllm_out = mllm_outputs[s.sample_id]
+        diag = {
+            "sample_id": s.sample_id, "subtask": subtask_name,
+            "image_path": s.image_path, "question": s.question,
+            "ground_truth": s.label.lower(), "mllm_output": mllm_out,
+            "raw_answer": mme_extract_yesno(mllm_out),
+        }
 
         # Woodpecker
         try:
@@ -248,20 +256,35 @@ for subtask_name, samples in subtasks.items():
                     messages=[{"role": "user", "content": prompt}],
                     max_completion_tokens=512)
                 wp_corrected = resp.choices[0].message.content or mllm_out
+                diag["wp_vkb"] = vkb_text
             else:
                 wp_corrected = mllm_out
+                diag["wp_vkb"] = "(claim gen failed)"
+            diag["wp_corrected"] = wp_corrected
             wp_answer = judge.extract_yesno(wp_corrected, s.question)
+            diag["wp_answer"] = wp_answer
         except Exception as e:
             _log.error("WP failed %s: %s", s.sample_id, e)
             wp_answer = mme_extract_yesno(mllm_out)
+            diag["wp_corrected"] = mllm_out
+            diag["wp_answer"] = wp_answer
+            diag["wp_error"] = str(e)
 
         # RelCheckFull
         try:
             full_corrected = full_system.correct(s.image_path, mllm_out)
+            diag["full_corrected"] = full_corrected
+            diag["full_kb"] = full_system.last_kb_text
             full_answer = judge.extract_yesno(full_corrected, s.question)
+            diag["full_answer"] = full_answer
         except Exception as e:
             _log.error("Full failed %s: %s", s.sample_id, e)
             full_answer = mme_extract_yesno(mllm_out)
+            diag["full_corrected"] = mllm_out
+            diag["full_answer"] = full_answer
+            diag["full_error"] = str(e)
+
+        sample_diagnostics.append(diag)
 
         wp_preds.append({
             "image_name": s.metadata.get("image_name", s.sample_id),
@@ -279,6 +302,60 @@ for subtask_name, samples in subtasks.items():
     _log.info("%s done — WP: %.0f, Full: %.0f",
               subtask_name, wp_results[subtask_name]["score"],
               full_results[subtask_name]["score"])
+
+# %%
+# ── Cell 6b: Per-sample diagnostics ────────────────────────
+# Inspect KB, corrections, and answer flips for each sample.
+# Filter by subtask or look at mismatches only.
+
+import json
+
+# Save full diagnostics to Drive for later analysis
+diag_path = f"{RESULTS_DIR}/sample_diagnostics.json"
+with open(diag_path, "w") as f:
+    json.dump(sample_diagnostics, f, indent=2)
+_log.info("Saved %d sample diagnostics to %s", len(sample_diagnostics), diag_path)
+
+# Show samples where RelCheckFull and Woodpecker disagree, or where
+# RelCheckFull got it wrong but Woodpecker got it right
+print("=" * 80)
+print("SAMPLES WHERE WOODPECKER CORRECT BUT RELCHECK WRONG")
+print("=" * 80)
+for d in sample_diagnostics:
+    gt = d["ground_truth"]
+    wp_ok = d.get("wp_answer") == gt
+    full_ok = d.get("full_answer") == gt
+    if wp_ok and not full_ok:
+        print(f"\n{'─'*60}")
+        print(f"[{d['subtask']}] {d['sample_id']}")
+        print(f"  Question:       {d['question']}")
+        print(f"  Ground truth:   {gt}")
+        print(f"  MLLM output:    {d['mllm_output']}")
+        print(f"  Raw answer:     {d['raw_answer']}")
+        print(f"  WP corrected:   {d.get('wp_corrected', 'N/A')}")
+        print(f"  WP answer:      {d.get('wp_answer')} ✓")
+        print(f"  Full corrected: {d.get('full_corrected', 'N/A')}")
+        print(f"  Full answer:    {d.get('full_answer')} ✗")
+        if d.get("full_kb"):
+            print(f"  Full KB:\n{d['full_kb']}")
+
+print("\n" + "=" * 80)
+print("SAMPLES WHERE RELCHECK CORRECT BUT WOODPECKER WRONG")
+print("=" * 80)
+for d in sample_diagnostics:
+    gt = d["ground_truth"]
+    wp_ok = d.get("wp_answer") == gt
+    full_ok = d.get("full_answer") == gt
+    if full_ok and not wp_ok:
+        print(f"\n{'─'*60}")
+        print(f"[{d['subtask']}] {d['sample_id']}")
+        print(f"  Question:       {d['question']}")
+        print(f"  Ground truth:   {gt}")
+        print(f"  MLLM output:    {d['mllm_output']}")
+        print(f"  WP corrected:   {d.get('wp_corrected', 'N/A')}")
+        print(f"  WP answer:      {d.get('wp_answer')} ✗")
+        print(f"  Full corrected: {d.get('full_corrected', 'N/A')}")
+        print(f"  Full answer:    {d.get('full_answer')} ✓")
 
 # %%
 # ── Cell 7: Results table ──────────────────────────────────
