@@ -76,7 +76,7 @@ class LLaVAV1Loader:
         logger.info("Loading LLaVA v1 from %s …", _MODEL_ID)
         try:
             import torch
-            from llava.model import LlavaLlamaForCausalLM
+            from llava.model.language_model.llava_llama import LlavaLlamaForCausalLM
             from transformers import AutoTokenizer
 
             self.tokenizer = AutoTokenizer.from_pretrained(

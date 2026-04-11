@@ -28,9 +28,10 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 os.environ["HF_HUB_DISABLE_XET"] = "1"
 
 !pip install -q openai>=1.0 pydantic>=2.0 tqdm pandas scikit-learn \
-    transformers==4.31.0 torch accelerate bitsandbytes Pillow tenacity \
-    groundingdino-py tabulate python-Levenshtein spacy
+    Pillow tenacity groundingdino-py tabulate python-Levenshtein spacy
+!pip install transformers==4.31.0 huggingface_hub==0.25.2 --force-reinstall -q
 !python -m spacy download en_core_web_md -q
+import transformers; print("transformers:", transformers.__version__)
 
 from google.colab import drive
 drive.mount("/content/drive")
@@ -123,7 +124,7 @@ _log.info("Capped to %d total samples (%d per subtask)", len(all_mme), MAX_PER_S
 import torch
 from PIL import Image
 from tqdm import tqdm
-from llava.model import LlavaLlamaForCausalLM
+from llava.model.language_model.llava_llama import LlavaLlamaForCausalLM
 from llava.constants import DEFAULT_IMAGE_TOKEN, IMAGE_TOKEN_INDEX
 from llava.conversation import conv_templates
 from llava.mm_utils import tokenizer_image_token, process_images

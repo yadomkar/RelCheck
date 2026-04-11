@@ -57,7 +57,6 @@ class RelCheckClaimGeom:
             CorrectionConfig(
                 openai_api_key=resolved_key,
                 thinking_model=corrector_model,
-                correction_model=corrector_model,
             )
         )
         self._pipeline = ClaimGenerationPipeline(

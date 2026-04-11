@@ -350,7 +350,6 @@ from relcheck_v3.correction.corrector import HallucinationCorrector
 correction_config = CorrectionConfig(
     openai_api_key=OPENAI_API_KEY,
     thinking_model=CORRECTION_MODEL,
-    correction_model=CORRECTION_MODEL,
     reasoning_effort=REASONING_EFFORT,
     max_edit_chars=MAX_EDIT_CHARS,
     min_edit_chars=MIN_EDIT_CHARS,
