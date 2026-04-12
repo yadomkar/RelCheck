@@ -26,7 +26,8 @@ os.environ["HF_HUB_DISABLE_XET"] = "1"
 !pip install -q openai>=1.0 pydantic>=2.0 tqdm pandas scikit-learn \
     Pillow tenacity groundingdino-py supervision==0.6.0 addict yapf \
     tabulate python-Levenshtein spacy
-!pip install transformers==4.31.0 --no-deps -q
+!pip install tokenizers==0.15.1 -q
+!pip install transformers==4.37.2 --no-deps -q
 !pip install huggingface_hub==0.25.2 --no-deps -q
 !python -m spacy download en_core_web_md -q
 import transformers; print("transformers:", transformers.__version__)
